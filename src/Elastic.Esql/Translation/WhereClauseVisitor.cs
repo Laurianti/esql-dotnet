@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -35,6 +35,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	protected override Expression VisitBinary(BinaryExpression node)
 	{
+		if (TryVisitRootNullGuard(node))
+			return node;
+
 		if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual)
 		{
 			var nullOp = node.NodeType == ExpressionType.Equal ? "IS NULL" : "IS NOT NULL";
@@ -494,6 +497,25 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var result = _builder.ToString();
 		_ = _builder.Clear().Append(saved);
 		return result;
+	}
+
+	/// <summary>
+	/// "p != null" on the lambda parameter itself: the document is never null, and
+	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
+	/// </summary>
+	private bool TryVisitRootNullGuard(BinaryExpression node)
+	{
+		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
+			return false;
+
+		var isRootGuard = (node.Left is ParameterExpression && IsNullConstant(node.Right))
+			|| (node.Right is ParameterExpression && IsNullConstant(node.Left));
+
+		if (!isRootGuard)
+			return false;
+
+		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "FALSE" : "TRUE");
+		return true;
 	}
 
 	private Expression VisitStringMethod(MethodCallExpression node)
