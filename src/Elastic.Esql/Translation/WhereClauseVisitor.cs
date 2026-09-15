@@ -586,11 +586,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <c>a &gt; b</c>. Only comparisons against the constant zero are handled, which is
 	/// the only shape that carries an ordering meaning.
 	/// <para>
-	/// The ordering itself is the one Elasticsearch applies to a keyword field, which
-	/// is ordinal: <c>"B"</c> sorts before <c>"a"</c>. In .NET these overloads are
-	/// culture-sensitive and would answer the other way round, so the two agree only
-	/// for values that order the same either way. Sorting and paging over a keyword
-	/// field are ordinal to begin with, which is what this rewrite exists for.
+	/// The ordering is the one Elasticsearch applies to a keyword field, which compares
+	/// the UTF-8 bytes: <c>"B"</c> sorts before <c>"a"</c>, where .NET's culture-sensitive
+	/// overloads answer the other way round. Sorting and paging over a keyword field are
+	/// byte-ordered to begin with, which is what this rewrite exists for.
+	/// </para>
+	/// <para>
+	/// The two are not identical even so: .NET's ordinal comparison reads UTF-16 code
+	/// units, so a supplementary character sorts before U+E000 there and after it by
+	/// UTF-8 bytes. They agree over the Basic Multilingual Plane, and diverge only for
+	/// values mixing surrogate pairs with the private-use area.
 	/// </para>
 	/// </summary>
 	private bool TryVisitStringComparison(BinaryExpression node)
@@ -629,15 +634,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (parameters.Length == 3 && parameters[2].ParameterType != typeof(StringComparison))
 			return false;
 
-		// ES|QL orders keyword values by their bytes. An explicitly ordinal comparison
-		// means exactly that; a culture-sensitive one means something else, and is
-		// refused rather than answered with an ordering it did not ask for.
+		// ES|QL orders keyword values by their UTF-8 bytes, which an explicitly ordinal
+		// comparison asks for; a culture-sensitive one asks for something else and is
+		// refused rather than answered with an ordering it did not request.
 		if (comparison is not null && !IsOrdinalComparison(comparison))
 		{
 			throw new NotSupportedException(
 				$"String method {call.Method.Name} is only supported with StringComparison.Ordinal: "
-				+ "keyword ordering is ordinal and case-sensitive, so any other comparison mode "
-				+ "asks for an ordering Elasticsearch does not apply.");
+				+ "keyword values are ordered by their UTF-8 bytes and comparison is "
+				+ "case-sensitive, so any other comparison mode asks for an ordering "
+				+ "Elasticsearch does not apply.");
 		}
 
 		// .NET orders a non-null string above null, which a plain ES|QL comparison
