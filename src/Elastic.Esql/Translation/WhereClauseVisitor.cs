@@ -431,6 +431,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (declaringType == typeof(Math))
 			return VisitMathMethod(node);
 
+		// Multi-value field predicates: tags.Any(t => t == "x"), tags.Contains("x").
+		// Checked before the constant-collection IN translation, because there the
+		// collection is a captured constant while here it is a document field.
+		if (TryVisitMultiValueField(node))
+			return node;
+
 		if (methodName == "Contains" && TryVisitCollectionContains(node))
 			return node;
 
@@ -683,6 +689,397 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		return node;
+	}
+
+	/// <summary>
+	/// Translates predicates over a multi-value document field into MATCH, which
+	/// matches a document when any of the field's values matches, without the row
+	/// duplication that MV_EXPAND would introduce.
+	/// <para>
+	/// Supported shapes: <c>field.Any(x =&gt; x == value)</c>, <c>field.Any()</c>,
+	/// <c>field.Contains(value)</c>.
+	/// </para>
+	/// </summary>
+	/// <summary>
+	/// Separates the values of a multi-value field when they are joined into one
+	/// string for a regular expression: the ASCII unit separator, which is reserved
+	/// for exactly this and does not occur in data.
+	/// </summary>
+	private const string ValueSeparator = "\u001F";
+
+	private enum ElementPredicateKind
+	{
+		Equal,
+		In,
+		StartsWith,
+		EndsWith,
+		Contains,
+		GreaterThan,
+		GreaterThanOrEqual,
+		LessThan,
+		LessThanOrEqual
+	}
+
+	/// <summary>A predicate over one value of a multi-value field, e.g. "x == 42".</summary>
+	private readonly record struct ElementPredicate(ElementPredicateKind Kind, IReadOnlyList<object?> Values, bool Negated);
+
+	/// <summary>
+	/// Predicates over multi-value document fields: field.Any(...), field.All(...) and
+	/// field.Contains(value). A document holds every value of the field at once, so
+	/// the quantifier is answered on the field itself, without expanding rows.
+	/// </summary>
+	private bool TryVisitMultiValueField(MethodCallExpression node)
+	{
+		var methodName = node.Method.Name;
+
+		if (methodName is not ("Any" or "All" or "Contains"))
+			return false;
+
+		// the source must be a document field, not a constant collection
+		var source = node.Method.IsStatic
+			? node.Arguments.Count > 0 ? node.Arguments[0] : null
+			: node.Object;
+
+		// arrays reach us through MemoryExtensions.Contains(ReadOnlySpan<T>, T)
+		if (source is not null && node.Method.DeclaringType == typeof(MemoryExtensions))
+			source = TryUnwrapMemoryExtensionsSource(source);
+
+		if (source is null || !IsMultiValueField(source))
+			return false;
+
+		// field.Any() with no predicate: the field simply has to hold a value
+		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
+		{
+			_ = _builder.Append("MV_COUNT(").Append(source.ResolveFieldName(_context.Metadata)).Append(") > 0");
+			return true;
+		}
+
+		var argument = node.Arguments[^1];
+
+		// field.Contains(value)
+		if (methodName == "Contains")
+			return TryAppendMatch(source, argument);
+
+		if (StripQuotes(argument) is not LambdaExpression { Parameters.Count: 1 } lambda)
+			return false;
+
+		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0]);
+		if (predicate is null)
+			return false;
+
+		return TryAppendQuantified(source, lambda.Parameters[0].Type, methodName == "All", predicate.Value);
+	}
+
+	/// <summary>
+	/// Reads the body of the lambda passed to Any/All as one predicate on the element.
+	/// Null guards on the element are dropped, since a stored value is never null.
+	/// </summary>
+	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated = false)
+	{
+		switch (body)
+		{
+			case UnaryExpression { NodeType: ExpressionType.Not } negation:
+				return TryParseElementPredicate(negation.Operand, element, !negated);
+
+			// "x != null && P(x)" is P(x)
+			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Left, element, ExpressionType.NotEqual):
+				return TryParseElementPredicate(conjunction.Right, element, negated);
+
+			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Right, element, ExpressionType.NotEqual):
+				return TryParseElementPredicate(conjunction.Left, element, negated);
+
+			// "x == null || P(x)" is P(x)
+			case BinaryExpression { NodeType: ExpressionType.OrElse } disjunction when IsNullGuard(disjunction.Left, element, ExpressionType.Equal):
+				return TryParseElementPredicate(disjunction.Right, element, negated);
+
+			case BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison:
+			{
+				var value = comparison.Left == element ? comparison.Right
+					: comparison.Right == element ? comparison.Left
+					: null;
+
+				if (value is null || !TryGetConstant(value, out var constant))
+					return null;
+
+				var isEqual = comparison.NodeType == ExpressionType.Equal;
+				return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated);
+			}
+
+			case BinaryExpression
+			{
+				NodeType: ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
+					or ExpressionType.LessThan or ExpressionType.LessThanOrEqual
+			} ordering:
+			{
+				// "10 < x" is "x > 10": keep the element on the left
+				var elementOnLeft = ordering.Left == element;
+				var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
+
+				if (value is null || !TryGetConstant(value, out var constant))
+					return null;
+
+				var kind = (ordering.NodeType, elementOnLeft) switch
+				{
+					(ExpressionType.GreaterThan, true) or (ExpressionType.LessThan, false) => ElementPredicateKind.GreaterThan,
+					(ExpressionType.GreaterThanOrEqual, true) or (ExpressionType.LessThanOrEqual, false) => ElementPredicateKind.GreaterThanOrEqual,
+					(ExpressionType.LessThan, true) or (ExpressionType.GreaterThan, false) => ElementPredicateKind.LessThan,
+					_ => ElementPredicateKind.LessThanOrEqual
+				};
+
+				return new ElementPredicate(kind, [constant], negated);
+			}
+
+			case MethodCallExpression call:
+			{
+				// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a")
+				if (call.Object == element && call.Method.DeclaringType == typeof(string) && call.Arguments.Count == 1)
+				{
+					ElementPredicateKind? kind = call.Method.Name switch
+					{
+						"StartsWith" => ElementPredicateKind.StartsWith,
+						"EndsWith" => ElementPredicateKind.EndsWith,
+						"Contains" => ElementPredicateKind.Contains,
+						_ => null
+					};
+
+					if (kind is null || !TryGetConstant(call.Arguments[0], out var constant))
+						return null;
+
+					return new ElementPredicate(kind.Value, [constant], negated);
+				}
+
+				// values.Contains(x), over a constant collection
+				if (TryGetContainsArguments(call, out var valueExpression, out var collection)
+					&& valueExpression == element
+					&& collection is not null)
+				{
+					return new ElementPredicate(ElementPredicateKind.In, collection.Cast<object?>().ToList(), negated);
+				}
+
+				return null;
+			}
+
+			default:
+				return null;
+		}
+	}
+
+	private static bool IsNullGuard(Expression expression, ParameterExpression element, ExpressionType comparison) =>
+		expression is BinaryExpression binary
+		&& binary.NodeType == comparison
+		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
+
+	private static bool TryGetConstant(Expression expression, out object? value)
+	{
+		try
+		{
+			value = GetConstantValue(expression);
+			return true;
+		}
+		catch (NotSupportedException)
+		{
+			value = null;
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// Any(P) and All(P) over the values of a field. A negated predicate is pushed into
+	/// the quantifier, since Any(not P) is "not All(P)" and All(not P) is "not Any(P)".
+	/// </summary>
+	private bool TryAppendQuantified(Expression field, Type elementType, bool all, ElementPredicate predicate)
+	{
+		if (predicate.Negated)
+		{
+			_ = _builder.Append("NOT ");
+			all = !all;
+			predicate = predicate with { Negated = false };
+		}
+
+		var name = field.ResolveFieldName(_context.Metadata);
+
+		switch (predicate.Kind)
+		{
+			// a document matches MATCH when any of the field's values does
+			case ElementPredicateKind.Equal when !all:
+				AppendMatch(name, predicate.Values[0]);
+				return true;
+
+			case ElementPredicateKind.In when !all:
+				if (predicate.Values.Count == 0)
+				{
+					_ = _builder.Append("FALSE");
+					return true;
+				}
+
+				if (predicate.Values.Count > 1)
+					_ = _builder.Append('(');
+
+				for (var i = 0; i < predicate.Values.Count; i++)
+				{
+					if (i > 0)
+						_ = _builder.Append(" OR ");
+
+					AppendMatch(name, predicate.Values[i]);
+				}
+
+				if (predicate.Values.Count > 1)
+					_ = _builder.Append(')');
+
+				return true;
+
+			// every value equals v: the field holds one distinct value, and it matches.
+			// A missing field has no value that differs, as All() over an empty sequence is true.
+			case ElementPredicateKind.Equal:
+				_ = _builder.Append('(').Append(name).Append(" IS NULL OR (MV_COUNT(MV_DEDUPE(").Append(name).Append(")) == 1 AND ");
+				AppendMatch(name, predicate.Values[0]);
+				_ = _builder.Append("))");
+				return true;
+
+			// some value is above v when the largest is; every value is when the smallest is
+			case ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual
+				or ElementPredicateKind.LessThan or ElementPredicateKind.LessThanOrEqual:
+			{
+				var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
+				var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
+				var op = predicate.Kind switch
+				{
+					ElementPredicateKind.GreaterThan => ">",
+					ElementPredicateKind.GreaterThanOrEqual => ">=",
+					ElementPredicateKind.LessThan => "<",
+					_ => "<="
+				};
+
+				// All() over the empty field holds
+				if (all)
+					_ = _builder.Append('(').Append(name).Append(" IS NULL OR ");
+
+				_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
+					.Append(_context.FormatValue(predicate.Values[0], null));
+
+				if (all)
+					_ = _builder.Append(')');
+
+				return true;
+			}
+
+			default:
+				return TryAppendValuePattern(name, elementType, all, predicate);
+		}
+	}
+
+	private void AppendMatch(string field, object? value) =>
+		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(_context.FormatValue(value, null)).Append(')');
+
+	/// <summary>
+	/// Predicates that MATCH cannot answer, such as "starts with": the values are joined
+	/// into one string, "␟a␟b␟", and a regular expression checks either that some value
+	/// matches (Any) or that the string is made only of matching values (All).
+	/// </summary>
+	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)
+	{
+		var isString = elementType == typeof(string);
+		var isIntegral = elementType == typeof(int) || elementType == typeof(long)
+			|| elementType == typeof(short) || elementType == typeof(byte);
+
+		// text predicates need text; equality over the joined string needs a value whose
+		// text form is unambiguous, which rules out floating-point fields
+		if (!isString && (!isIntegral || predicate.Kind is not (ElementPredicateKind.Equal or ElementPredicateKind.In)))
+			return false;
+
+		var values = predicate.Values.Select(v => v?.ToString() ?? "").ToList();
+
+		foreach (var value in values)
+		{
+			if (value.Contains(ValueSeparator, StringComparison.Ordinal) || value.Contains("\"\"\"", StringComparison.Ordinal))
+			{
+				throw new NotSupportedException(
+					"A value used in a predicate over a multi-value field cannot contain the "
+					+ "unit separator (U+001F) or three consecutive double quotes.");
+			}
+		}
+
+		var anyValue = "[^" + ValueSeparator + "]*";
+		var valuePattern = predicate.Kind switch
+		{
+			ElementPredicateKind.Equal => EscapeRegex(values[0]),
+			ElementPredicateKind.In => "(" + string.Join("|", values.Select(EscapeRegex)) + ")",
+			ElementPredicateKind.StartsWith => EscapeRegex(values[0]) + anyValue,
+			ElementPredicateKind.EndsWith => anyValue + EscapeRegex(values[0]),
+			ElementPredicateKind.Contains => anyValue + EscapeRegex(values[0]) + anyValue,
+			_ => throw new InvalidOperationException()
+		};
+
+		// All over an empty list holds only for the empty field; Any never does
+		if (predicate.Kind == ElementPredicateKind.In && values.Count == 0)
+		{
+			_ = _builder.Append(all ? field + " IS NULL" : "FALSE");
+			return true;
+		}
+
+		// Any: some value, between two separators, matches.
+		// All: the whole string is a run of matching values; "␟" alone, the empty field, is one too.
+		var pattern = all
+			? "(" + ValueSeparator + valuePattern + ")*" + ValueSeparator
+			: ".*" + ValueSeparator + valuePattern + ValueSeparator + ".*";
+
+		var joined = isString ? field : "TO_STRING(" + field + ")";
+
+		_ = _builder
+			.Append("COALESCE(CONCAT(\"").Append(ValueSeparator).Append("\", MV_CONCAT(").Append(joined)
+			.Append(", \"").Append(ValueSeparator).Append("\"), \"").Append(ValueSeparator).Append("\"), \"").Append(ValueSeparator)
+			.Append("\") RLIKE \"\"\"").Append(pattern).Append("\"\"\"");
+
+		return true;
+	}
+
+	/// <summary>Escapes the characters Lucene regular expressions reserve.</summary>
+	private static string EscapeRegex(string value)
+	{
+		const string reserved = "\\.?+*|{}[]()\"#@&<>~";
+		var builder = new StringBuilder(value.Length);
+
+		foreach (var c in value)
+		{
+			if (reserved.Contains(c))
+				_ = builder.Append('\\');
+
+			_ = builder.Append(c);
+		}
+
+		return builder.ToString();
+	}
+
+	private bool TryAppendMatch(Expression field, Expression value)
+	{
+		if (!TryGetConstant(value, out var constant))
+			return false;
+
+		AppendMatch(field.ResolveFieldName(_context.Metadata), constant);
+		return true;
+	}
+
+	/// <summary>A collection-typed member of the document, as opposed to a captured constant.</summary>
+	private static bool IsMultiValueField(Expression expression) =>
+		IsEnumerableType(expression.Type) && ContainsParameter(expression);
+
+	private static bool ContainsParameter(Expression expression) => expression switch
+	{
+		ParameterExpression => true,
+		MemberExpression member => member.Expression is not null && ContainsParameter(member.Expression),
+		UnaryExpression unary => ContainsParameter(unary.Operand),
+		MethodCallExpression call => call.Object is not null && ContainsParameter(call.Object),
+		_ => false
+	};
+
+	private static Expression StripQuotes(Expression expression)
+	{
+		var current = expression;
+
+		while (current is UnaryExpression { NodeType: ExpressionType.Quote } quote)
+			current = quote.Operand;
+
+		return current;
 	}
 
 	private bool TryVisitCollectionContains(MethodCallExpression node)

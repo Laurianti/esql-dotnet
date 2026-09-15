@@ -1,0 +1,303 @@
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
+// Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
+// See the LICENSE file in the project root for more information
+
+namespace Elastic.Esql.Tests.Translation.WhereClause;
+
+/// <summary>
+/// Any and All over a multi-value field with a predicate MATCH cannot answer, such as
+/// "starts with" or "greater than", and the way negation moves between the two.
+/// </summary>
+public class MultiValueQuantifierTests : EsqlTestBase
+{
+	// the unit separator joins the values when a regular expression looks at them
+	private const string Sep = "";
+
+	private static string Joined(string field) =>
+		$"COALESCE(CONCAT(\"{Sep}\", MV_CONCAT({field}, \"{Sep}\"), \"{Sep}\"), \"{Sep}\")";
+
+	[Test]
+	public void Any_StartsWith_MatchesSomeValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}wat[^{{Sep}}]*{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_EndsWith_MatchesSomeValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.EndsWith("al")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*al{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_Contains_MatchesSomeValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains("at")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*at[^{{Sep}}]*{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void All_StartsWith_RequiresEveryValueToMatch()
+	{
+		// the joined string must be a run of matching values; the empty field is one too
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => t.StartsWith("i")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """({{Sep}}i[^{{Sep}}]*)*{{Sep}}"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_WithANegatedPredicate_BecomesNotAll()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => !t.StartsWith("i")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE NOT {{Joined("tags")}} RLIKE """({{Sep}}i[^{{Sep}}]*)*{{Sep}}"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void All_WithANegatedPredicate_BecomesNotAny()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => !t.Contains("at")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE NOT {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*at[^{{Sep}}]*{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_NotEqual_BecomesNotAllEqual()
+	{
+		// "some value differs from x" is "not every value is x"
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t != "iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT (tags IS NULL OR (MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(tags, "iot")))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void NullGuardsOnTheElement_AreDropped()
+	{
+		// generated predicates guard the element against null; a stored value never is
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t != null && t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}wat[^{{Sep}}]*{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void NegatedNullGuardedPredicate_IsReadThroughTheGuard()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => !(t != null && t.StartsWith("wat"))))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE NOT {{Joined("tags")}} RLIKE """({{Sep}}wat[^{{Sep}}]*)*{{Sep}}"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_InAConstantList_TranslatesToMatchesInOr()
+	{
+		string[] wanted = ["iot", "water"];
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void All_InAConstantList_RequiresEveryValueToBeListed()
+	{
+		string[] wanted = ["iot", "water"];
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """({{Sep}}(iot|water))*{{Sep}}"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void All_InAConstantListOfIntegers_ComparesTheirText()
+	{
+		int[] wanted = [5, 42];
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.All(r => wanted.Contains(r)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("TO_STRING(ratings)")}} RLIKE """({{Sep}}(5|42))*{{Sep}}"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void ReservedRegexCharacters_AreEscaped()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("a.b(c)|d")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$""""
+            FROM products
+            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}a\.b\(c\)\|d[^{{Sep}}]*{{Sep}}.*"""
+            """".NativeLineEndings());
+	}
+
+	[Test]
+	public void AValueHoldingTheSeparator_IsRefused()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("a" + Sep + "b")));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void Any_GreaterThan_ComparesTheLargestValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.Any(r => r > 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MV_MAX(ratings) > 3
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void All_GreaterThan_ComparesTheSmallestValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.All(r => r >= 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (ratings IS NULL OR MV_MIN(ratings) >= 3)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_LessThan_ComparesTheSmallestValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.Any(r => r < 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MV_MIN(ratings) < 3
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AComparisonWithTheElementOnTheRight_IsFlipped()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.Any(r => 3 < r))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MV_MAX(ratings) > 3
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Any_WithAPredicateThatCannotBeTranslated_StillThrows()
+	{
+		// nothing approximate: an unknown predicate keeps the existing behaviour
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Length > 3));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+}

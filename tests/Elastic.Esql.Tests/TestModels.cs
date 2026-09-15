@@ -12,6 +12,7 @@ namespace Elastic.Esql.Tests;
 // ============================================================================
 
 [JsonSerializable(typeof(LogEntry))]
+[JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(SimpleDocument))]
 [JsonSerializable(typeof(MetricDocument))]
 [JsonSerializable(typeof(EventDocument))]
@@ -47,6 +48,20 @@ public class BookProjection
 	public string Id { get; set; } = string.Empty;
 	public string Title { get; set; } = string.Empty;
 	public float Score { get; set; }
+}
+
+/// <summary>
+/// Document with multi-value fields, for predicates over collections.
+/// </summary>
+public class TaggedProduct
+{
+	public string Name { get; set; } = string.Empty;
+
+	public string[] Tags { get; set; } = [];
+
+	public List<string> Categories { get; set; } = [];
+
+	public List<int> Ratings { get; set; } = [];
 }
 
 /// <summary>
