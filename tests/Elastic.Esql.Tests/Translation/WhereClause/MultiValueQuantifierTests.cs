@@ -440,4 +440,34 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		_ = esql.Should().Contain(@"LIKE ""*a\""b*""");
 	}
+
+	[Test]
+	public void ACapturedValue_BecomesAParameter()
+	{
+		// with inlineParameters off the established scalar path emits ?name, and these
+		// predicates have to do the same rather than embedding the value
+		var tag = "iot";
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == tag))
+			.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Contain("MATCH(tags, ?tag)");
+	}
+
+	[Test]
+	public void ACapturedValue_IsOneParameterForAllPositions()
+	{
+		var prefix = "wat";
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(prefix)))
+			.ToEsqlString(inlineParameters: false);
+
+		// the same parameter at every position, not one per position
+		_ = esql.Should().Contain("?prefix");
+		_ = esql.Should().NotContain("?prefix1");
+	}
 }

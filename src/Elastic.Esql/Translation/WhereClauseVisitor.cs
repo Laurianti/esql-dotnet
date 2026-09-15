@@ -800,7 +800,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>A predicate over one value of a multi-value field, e.g. "x == 42".</summary>
-	private readonly record struct ElementPredicate(ElementPredicateKind Kind, IReadOnlyList<object?> Values, bool Negated);
+	/// <param name="Names">
+	/// The captured variable each value came from, where it came from one, so the
+	/// value can be emitted as a query parameter rather than inlined.
+	/// </param>
+	private readonly record struct ElementPredicate(
+		ElementPredicateKind Kind,
+		IReadOnlyList<object?> Values,
+		bool Negated,
+		IReadOnlyList<string?>? Names = null);
 
 	/// <summary>
 	/// Predicates over a multi-value document field: <c>field.Any(...)</c>,
@@ -890,7 +898,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					return null;
 
 				var isEqual = comparison.NodeType == ExpressionType.Equal;
-				return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated);
+				return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
 			}
 
 			case BinaryExpression
@@ -914,7 +922,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					_ => ElementPredicateKind.LessThanOrEqual
 				};
 
-				return new ElementPredicate(kind, [constant], negated);
+				return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
 			}
 
 			case MethodCallExpression call:
@@ -926,7 +934,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 						|| !TryGetConstant(call.Arguments[0], out var constant))
 						return null;
 
-					return new ElementPredicate(kind, [constant], negated);
+					return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
 				}
 
 				// values.Contains(x), over a constant collection
@@ -984,6 +992,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// multi-value field stores no null element, so there is nothing to match, and
 	/// MATCH(field, null) is not valid ES|QL.
 	/// </summary>
+	/// <summary>The captured variable an expression reads, when it reads one.</summary>
+	private static string? CapturedName(Expression expression) =>
+		expression is MemberExpression { Expression: ConstantExpression or MemberExpression } member
+			? member.Member.Name
+			: null;
+
 	private static bool TryGetConstant(Expression expression, out object? value)
 	{
 		try
@@ -1018,7 +1032,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			// a document matches MATCH when any of the field's values does
 			case ElementPredicateKind.Equal when !all:
-				AppendMatch(name, predicate.Values[0]);
+				AppendMatch(name, RenderValue(predicate, 0));
 				return true;
 
 			case ElementPredicateKind.In when !all:
@@ -1036,7 +1050,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					if (i > 0)
 						_ = _builder.Append(" OR ");
 
-					AppendMatch(name, predicate.Values[i]);
+					AppendMatch(name, RenderValue(predicate, i));
 				}
 
 				if (predicate.Values.Count > 1)
@@ -1048,7 +1062,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			// A missing field has no value that differs, as All() over an empty sequence is true.
 			case ElementPredicateKind.Equal:
 				_ = _builder.Append('(').Append(name).Append(" IS NULL OR (MV_COUNT(MV_DEDUPE(").Append(name).Append(")) == 1 AND ");
-				AppendMatch(name, predicate.Values[0]);
+				AppendMatch(name, RenderValue(predicate, 0));
 				_ = _builder.Append("))");
 				return true;
 
@@ -1073,7 +1087,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
 
 				_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
-					.Append(_context.FormatValue(predicate.Values[0], null)).Append(')');
+					.Append(RenderValue(predicate, 0)).Append(')');
 
 				return true;
 			}
@@ -1083,8 +1097,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
-	private void AppendMatch(string field, object? value) =>
-		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(_context.FormatValue(value, null)).Append(')');
+	/// <summary>
+	/// A value of an element predicate, as a query parameter when it came from a
+	/// captured variable and <c>InlineParameters</c> is off, and as a literal otherwise.
+	/// </summary>
+	private string RenderValue(ElementPredicate predicate, int index)
+	{
+		var name = predicate.Names is { } names && index < names.Count ? names[index] : null;
+
+		return name is null
+			? _context.FormatValue(predicate.Values[index], null)
+			: _context.GetValueOrParameterName(name, predicate.Values[index]);
+	}
+
+	private void AppendMatch(string field, string renderedValue) =>
+		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
 
 	/// <summary>
 	/// Predicates MATCH cannot answer, such as "starts with". ES|QL applies a scalar
@@ -1128,6 +1155,20 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// those positions alone, and saying "false" would let an enclosing NOT turn it
 		// into a match. The predicate is null there instead, which WHERE drops either
 		// way, so such a document is left out of the result rather than answered wrongly.
+		// rendered once, before the positions: a captured value becomes one parameter
+		// rather than one per position
+		// This path compares the text of a value, TO_STRING for anything but a string
+		// field, so the values are rendered as text too rather than in their own type.
+		// A captured value still becomes a parameter, but only where the comparison is
+		// against the value itself.
+		var rendered = values
+			.Select((value, index) => predicate.Kind == ElementPredicateKind.Contains
+				? EsqlFormatting.FormatString("*" + EscapeLikeMetacharacters(value) + "*")
+				: isString
+					? RenderValue(predicate, index)
+					: EsqlFormatting.FormatString(value))
+			.ToList();
+
 		_ = _builder.Append("CASE(MV_COUNT(").Append(field).Append(") > ").Append(MaxInspectedValues).Append(", NULL, (");
 
 		for (var position = 0; position < MaxInspectedValues; position++)
@@ -1146,7 +1187,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			if (all)
 				_ = _builder.Append(value).Append(" IS NULL OR ");
 
-			AppendValuePredicate(value, isString, predicate.Kind, values);
+			AppendValuePredicate(value, isString, predicate.Kind, rendered);
 
 			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
 		}
@@ -1164,46 +1205,41 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		value.Replace("\\", "\\\\").Replace("*", "\\*").Replace("?", "\\?");
 
 	/// <summary>One value of a multi-value field, tested against the predicate.</summary>
-	private void AppendValuePredicate(string value, bool isString, ElementPredicateKind kind, IReadOnlyList<string> values)
+	/// <summary>One value of a multi-value field, tested against already rendered values.</summary>
+	private void AppendValuePredicate(string value, bool isString, ElementPredicateKind kind, IReadOnlyList<string> rendered)
 	{
 		var text = isString ? value : $"TO_STRING({value})";
 
 		switch (kind)
 		{
 			case ElementPredicateKind.StartsWith:
-				_ = _builder.Append("STARTS_WITH(").Append(text).Append(", ")
-					.Append(EsqlFormatting.FormatString(values[0])).Append(')');
+				_ = _builder.Append("STARTS_WITH(").Append(text).Append(", ").Append(rendered[0]).Append(')');
 				break;
 
 			case ElementPredicateKind.EndsWith:
-				_ = _builder.Append("ENDS_WITH(").Append(text).Append(", ")
-					.Append(EsqlFormatting.FormatString(values[0])).Append(')');
+				_ = _builder.Append("ENDS_WITH(").Append(text).Append(", ").Append(rendered[0]).Append(')');
 				break;
 
 			case ElementPredicateKind.Contains:
-				// only the LIKE metacharacters are escaped here; the surrounding string
-				// literal is the formatter's job, and escaping twice would double the
-				// backslashes it adds
-				_ = _builder.Append(text).Append(" LIKE ")
-					.Append(EsqlFormatting.FormatString("*" + EscapeLikeMetacharacters(values[0]) + "*"));
+				_ = _builder.Append(text).Append(" LIKE ").Append(rendered[0]);
 				break;
 
 			case ElementPredicateKind.In:
 				_ = _builder.Append('(');
 
-				for (var i = 0; i < values.Count; i++)
+				for (var i = 0; i < rendered.Count; i++)
 				{
 					if (i > 0)
 						_ = _builder.Append(" OR ");
 
-					_ = _builder.Append(text).Append(" == ").Append(EsqlFormatting.FormatString(values[i]));
+					_ = _builder.Append(text).Append(" == ").Append(rendered[i]);
 				}
 
 				_ = _builder.Append(')');
 				break;
 
 			default:
-				_ = _builder.Append(text).Append(" == ").Append(EsqlFormatting.FormatString(values[0]));
+				_ = _builder.Append(text).Append(" == ").Append(rendered[0]);
 				break;
 		}
 	}
@@ -1214,7 +1250,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!TryGetConstant(value, out var constant))
 			return false;
 
-		AppendMatch(ResolveMultiValueField(field), constant);
+		AppendMatch(ResolveMultiValueField(field), _context.GetValueOrParameterName(CapturedName(value) ?? "value", constant));
 		return true;
 	}
 
