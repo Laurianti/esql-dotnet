@@ -664,11 +664,74 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => flipped ? ">=" : "<="
 		};
 
+		// string.Compare orders a null operand before everything, where a comparison
+		// against a missing field yields null in ES|QL and the row is dropped. Only the
+		// static form defines that, since the instance form throws on a null receiver,
+		// so the missing field is spelled out when it can carry one.
+		var staticForm = call.Object is null;
+		var nullableField = staticForm ? FieldThatMayBeMissing(first, second) : null;
+
+		if (nullableField is not null)
+			_ = _builder.Append('(').Append(nullableField).Append(op[0] == '<' ? " IS NULL OR " : " IS NOT NULL AND ");
+
 		_ = Visit(first);
 		_ = _builder.Append(' ').Append(op).Append(' ');
 		_ = Visit(second);
 
+		if (nullableField is not null)
+			_ = _builder.Append(')');
+
 		return true;
+	}
+
+	/// <summary>
+	/// The field of a comparison that can be missing, when exactly one side reads a
+	/// nullable field of the document and the other is a value to compare it against.
+	/// </summary>
+	private string? FieldThatMayBeMissing(Expression first, Expression second)
+	{
+		var left = AsNullableField(first);
+		var right = AsNullableField(second);
+
+		// with a field on both sides there is no single row-level guard to write
+		return left is not null && right is null ? left
+			: right is not null && left is null ? right
+			: null;
+	}
+
+	private string? AsNullableField(Expression expression) =>
+		expression is MemberExpression member
+		&& ExpressionTranslationHelpers.IsRootedInParameter(member)
+		&& IsDeclaredNullable(member.Member)
+			? ResolveFieldPath(member)
+			: null;
+
+	/// <summary>
+	/// Whether the member is declared as nullable. Only then is the guard worth writing:
+	/// on a non-nullable member the comparison already reads the way the source does.
+	/// </summary>
+	private static bool IsDeclaredNullable(MemberInfo member)
+	{
+		var type = member switch
+		{
+			PropertyInfo property => property.PropertyType,
+			FieldInfo field => field.FieldType,
+			_ => null
+		};
+
+		if (type is null || type.IsValueType)
+			return false;
+
+		// the compiler records a nullable reference type as an attribute on the member
+		var nullable = member.GetCustomAttributes()
+			.FirstOrDefault(attribute => attribute.GetType().FullName == "System.Runtime.CompilerServices.NullableAttribute");
+
+		if (nullable is null)
+			return false;
+
+		var flags = nullable.GetType().GetField("NullableFlags")?.GetValue(nullable);
+
+		return flags is byte[] { Length: > 0 } bytes && bytes[0] == 2;
 	}
 
 	private Expression VisitStringMethod(MethodCallExpression node)
@@ -1018,10 +1081,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (comparer is null)
 			return true;
 
+		// SortedSet exposes an IComparer, not an IEqualityComparer: there is no default
+		// to compare it against, so the collection is simply not one this translation
+		// can read membership from
+		var equality = comparer.GetType().GetInterfaces()
+			.FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEqualityComparer<>));
+
+		if (equality is null)
+			return false;
+
 		var defaultComparer = typeof(EqualityComparer<>)
-			.MakeGenericType(comparer.GetType().GetInterfaces()
-				.First(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEqualityComparer<>))
-				.GetGenericArguments()[0])
+			.MakeGenericType(equality.GetGenericArguments()[0])
 			.GetProperty("Default")!
 			.GetValue(null);
 

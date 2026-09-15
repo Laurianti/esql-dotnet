@@ -117,4 +117,52 @@ public class StringComparisonTests : EsqlTestBase
             | WHERE message > "m"
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void StaticCompareOverANullableField_SpellsOutTheMissingValue()
+	{
+		// string.Compare orders null before everything, where a comparison against a
+		// missing field is null in ES|QL and the row would be dropped
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.ClientIp, "m", StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp IS NULL OR clientIp < "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void StaticCompareAboveANullableField_ExcludesTheMissingValue()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.ClientIp, "m", StringComparison.Ordinal) > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp IS NOT NULL AND clientIp > "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void CompareToOverANullableField_NeedsNoGuard()
+	{
+		// the instance form throws on a null receiver, so there is no ordering to encode
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.ClientIp!.CompareTo("m") < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE clientIp < "m"
+            """.NativeLineEndings());
+	}
 }

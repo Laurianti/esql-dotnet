@@ -215,4 +215,20 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
 	}
+
+	[Test]
+	public void ASortedSet_FailsSoftRatherThanThrowingInternally()
+	{
+		// its Comparer is an IComparer, not an IEqualityComparer: the translation simply
+		// cannot read membership from it, and says so like any other unsupported shape
+		var wanted = new SortedSet<string> { "iot" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }
