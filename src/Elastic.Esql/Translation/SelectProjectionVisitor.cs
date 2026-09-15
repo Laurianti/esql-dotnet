@@ -381,12 +381,12 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		{
 			MemberExpression member => member.Expression is not null && ReadsThrough(member.Expression, path),
 			UnaryExpression unary => ReadsThrough(unary.Operand, path),
-			// a nested init reads through the path when at least one of its members
-			// does, and none of them reaches outside it: a purely constant child would
-			// be emitted for a missing parent, where the source gives null
+			// a nested init reads through the path only when every member does: a constant
+			// member would be emitted for a missing parent, where the source gives null,
+			// and a child made of constants alone has nothing that reads through at all
 			MemberInitExpression init => init.Bindings.OfType<MemberAssignment>() is var bindings
-				&& bindings.Any(b => ReadsThrough(b.Expression, path))
-				&& bindings.All(b => ReadsThrough(b.Expression, path) || b.Expression is ConstantExpression),
+				&& bindings.Any()
+				&& bindings.All(b => ReadsThrough(b.Expression, path)),
 			MethodCallExpression call => call.Object is not null && ReadsThrough(call.Object, path),
 			_ => false
 		};

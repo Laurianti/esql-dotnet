@@ -64,6 +64,26 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAChildWithAConstantMember_IsRefused()
+	{
+		// one member reads through Host, the other is a constant: for a document with
+		// no Host the source gives null, where the constant would give a child with a
+		// value in it, so the guard cannot be dropped
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null
+					? null!
+					: new NestedSelectionHost { Name = "constant", Geo = new NestedSelectionGeo { City = l.Host.Geo.City } }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAPurelyConstantChild_IsNotUnwrapped()
 	{
 		// nothing in the child reads through Host, so dropping the guard would give the
