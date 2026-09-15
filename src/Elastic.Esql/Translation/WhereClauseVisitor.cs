@@ -22,8 +22,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private readonly EsqlTranslationContext _context = context ?? throw new ArgumentNullException(nameof(context));
 	private readonly StringBuilder _builder = new();
 	private MemberInfo? _comparisonPropertyContext;
-	private bool _insideNegation;
-	private readonly List<string> _pendingEncodingGuards = [];
 
 	/// <summary>
 	/// Translates a predicate expression to an ES|QL condition string.
@@ -187,45 +185,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		switch (node.NodeType)
 		{
 			case ExpressionType.Not:
-			{
-				// A multi-value predicate emits a guard stating that its encoding can be
-				// trusted, and this negation must not flip it. The operand is translated
-				// first, so the guard it asks for can be placed ahead of the NOT.
-				var start = _builder.Length;
-				var wasNegated = _insideNegation;
-				var outerGuards = _pendingEncodingGuards.Count;
-
-				_insideNegation = true;
-
+				_ = _builder.Append("NOT ");
 				_ = Visit(node.Operand);
-
-				var translated = _builder.ToString(start, _builder.Length - start);
-				_ = _builder.Remove(start, _builder.Length - start);
-
-				// every guard the operand asked for belongs in front of this negation,
-				// not underneath it
-				var guards = _pendingEncodingGuards.Skip(outerGuards).ToList();
-				_pendingEncodingGuards.RemoveRange(outerGuards, _pendingEncodingGuards.Count - outerGuards);
-
-				if (guards.Count == 0)
-				{
-					_ = _builder.Append("NOT ").Append(translated);
-				}
-				else if (wasNegated)
-				{
-					// an enclosing negation will place them, so they travel further out
-					_pendingEncodingGuards.AddRange(guards);
-					_ = _builder.Append("NOT ").Append(translated);
-				}
-				else
-				{
-					_ = _builder.Append('(').Append(string.Join(" AND ", guards.Distinct()))
-						.Append(" AND NOT ").Append(translated).Append(')');
-				}
-
-				_insideNegation = wasNegated;
 				break;
-			}
 
 			case ExpressionType.Convert:
 			case ExpressionType.ConvertChecked:
@@ -767,7 +729,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return node;
 	}
 
-	private const string ValueSeparator = "\u001F";
+	/// <summary>
+	/// How many values of a multi-value field a predicate inspects, one position at a
+	/// time. MV_SLICE reads a value by position, so the count has to be bounded, and a
+	/// document holding more values is excluded rather than answered from a prefix.
+	/// </summary>
+	private const int MaxInspectedValues = 32;
 
 	private enum ElementPredicateKind
 	{
@@ -990,29 +957,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var name = field.ResolveFieldName(_context.Metadata);
 
 		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
-		// satisfies the All that was written, so its guard is emitted around the
-		// negation rather than inside it
-		// The encoding guard states that the joined string can be trusted, which is not
-		// something a user-level negation should flip: a row whose values collide with
-		// the separator has to stay out either way, so the guard is emitted first.
-		var name0 = field.ResolveFieldName(_context.Metadata);
-		var effectiveAll = predicate.Negated ? !all : all;
-		var guardsEncoding = predicate.Negated && UsesValuePattern(elementType, effectiveAll, predicate);
-
-		// inside a user-level NOT the guard is handed to the unary visitor, which puts
-		// it in front of the negation instead of underneath it
-		if (_insideNegation && UsesValuePattern(elementType, effectiveAll, predicate))
-		{
-			_pendingEncodingGuards.Add(EncodingGuard(name0, elementType == typeof(string)));
-			guardsEncoding = true;
-		}
-		else if (guardsEncoding)
-		{
-			_ = _builder.Append('(');
-			AppendEncodingGuard(name0, elementType == typeof(string));
-			_ = _builder.Append(" AND ");
-		}
-
 		if (predicate.Negated)
 		{
 			_ = _builder.Append("NOT ");
@@ -1085,78 +1029,42 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			}
 
 			default:
-			{
-				if (!TryAppendValuePattern(name, elementType, all, predicate, guardsEncoding))
-					return false;
-
-				if (guardsEncoding && !_insideNegation)
-					_ = _builder.Append(')');
-
-				return true;
-			}
+				return TryAppendValuePattern(name, elementType, all, predicate);
 		}
 	}
-
-	/// <summary>
-	/// Whether the predicate is answered by a regular expression over the joined values,
-	/// which is what needs the encoding guard. Equality and membership are answered by
-	/// MATCH, except when All has to see every value at once.
-	/// </summary>
-	private static bool UsesValuePattern(Type elementType, bool all, ElementPredicate predicate) =>
-		predicate.Kind switch
-		{
-			ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains => true,
-			ElementPredicateKind.In => all && predicate.Values.Count > 0,
-			_ => false
-		};
 
 	private void AppendMatch(string field, object? value) =>
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(_context.FormatValue(value, null)).Append(')');
 
 	/// <summary>
-	/// Predicates that MATCH cannot answer, such as "starts with": the values are joined
-	/// into one string, "␟a␟b␟", and a regular expression checks either that some value
-	/// matches (Any) or that the string is made only of matching values (All).
+	/// Predicates MATCH cannot answer, such as "starts with". ES|QL applies a scalar
+	/// function to a single value, not to every value of a field at once, but MV_SLICE
+	/// reads a value by position, so the test is written out once per position and
+	/// combined: any of them for Any, all of them for All.
+	/// <para>
+	/// Only the first <see cref="MaxInspectedValues"/> positions are read. A field with
+	/// more values than that is beyond what this translation covers, and the predicate
+	/// is refused rather than answered from a prefix of the values.
+	/// </para>
 	/// </summary>
-	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate, bool guardAlreadyEmitted)
+	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)
 	{
 		var isString = elementType == typeof(string);
 		var isIntegral = elementType == typeof(int) || elementType == typeof(long)
 			|| elementType == typeof(short) || elementType == typeof(byte);
 
-		// text predicates need text; equality over the joined string needs a value whose
-		// text form is unambiguous, which rules out floating-point fields
+		// text predicates need text; equality needs a value whose text form is
+		// unambiguous, which rules out floating-point fields
 		if (!isString && (!isIntegral || predicate.Kind is not (ElementPredicateKind.Equal or ElementPredicateKind.In)))
 			return false;
 
-		// TO_STRING renders numbers the way Elasticsearch does, which is invariant;
+		// numbers are rendered the way Elasticsearch renders them, which is invariant;
 		// the current culture could otherwise introduce separators of its own
 		var values = predicate.Values
-			.Select(v => v is IFormattable formattable
+			.Select(value => value is IFormattable formattable
 				? formattable.ToString(null, CultureInfo.InvariantCulture)
-				: v?.ToString() ?? "")
+				: value?.ToString() ?? "")
 			.ToList();
-
-		foreach (var value in values)
-		{
-			if (value.Contains(ValueSeparator, StringComparison.Ordinal) || value.Contains("\"\"\"", StringComparison.Ordinal))
-			{
-				throw new NotSupportedException(
-					"A value used in a predicate over a multi-value field cannot contain the "
-					+ "unit separator (U+001F) or three consecutive double quotes.");
-			}
-		}
-
-		var anyValue = "[^" + ValueSeparator + "]*";
-		var valuePattern = predicate.Kind switch
-		{
-			ElementPredicateKind.Equal => EscapeRegex(values[0]),
-			ElementPredicateKind.In => "(" + string.Join("|", values.Select(EscapeRegex)) + ")",
-			ElementPredicateKind.StartsWith => EscapeRegex(values[0]) + anyValue,
-			ElementPredicateKind.EndsWith => anyValue + EscapeRegex(values[0]),
-			ElementPredicateKind.Contains => anyValue + EscapeRegex(values[0]) + anyValue,
-			_ => throw new InvalidOperationException()
-		};
 
 		// All over an empty list holds only for the empty field; Any never does
 		if (predicate.Kind == ElementPredicateKind.In && values.Count == 0)
@@ -1165,70 +1073,77 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return true;
 		}
 
-		// Any: some value, between two separators, matches.
-		// All: the whole string is a run of matching values; the lone separator, which
-		// stands for the empty field, is one of those runs too.
-		var pattern = all
-			? "(" + ValueSeparator + valuePattern + ")*" + ValueSeparator
-			: ".*" + ValueSeparator + valuePattern + ValueSeparator + ".*";
+		_ = _builder.Append('(');
 
-		var joined = JoinedValues(field, isString);
-
-		if (!guardAlreadyEmitted)
+		for (var position = 0; position < MaxInspectedValues; position++)
 		{
-			_ = _builder.Append('(');
-			AppendEncodingGuard(field, isString);
-			_ = _builder.Append(" AND ");
+			if (position > 0)
+				_ = _builder.Append(all ? " AND " : " OR ");
+
+			var value = $"MV_SLICE({field}, {position}, {position})";
+
+			// Past the last value MV_SLICE is null, and so would be the test, leaving
+			// the whole predicate undefined instead of answering either way. An absent
+			// value satisfies All and does not satisfy Any, so it is spelled out: the
+			// result then stays definite under an enclosing NOT.
+			_ = _builder.Append("COALESCE(");
+
+			if (all)
+				_ = _builder.Append(value).Append(" IS NULL OR ");
+
+			AppendValuePredicate(value, isString, predicate.Kind, values);
+
+			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
 		}
 
-		_ = _builder.Append(joined).Append(" RLIKE \"\"\"").Append(pattern).Append("\"\"\"");
-
-		if (!guardAlreadyEmitted)
-			_ = _builder.Append(')');
-
+		_ = _builder.Append(')');
 		return true;
 	}
 
-	/// <summary>The field's values joined into one string, delimited by the separator.</summary>
-	private string JoinedValues(string field, bool isString)
+	/// <summary>One value of a multi-value field, tested against the predicate.</summary>
+	private void AppendValuePredicate(string value, bool isString, ElementPredicateKind kind, IReadOnlyList<string> values)
 	{
-		var text = isString ? field : "TO_STRING(" + field + ")";
+		var text = isString ? value : $"TO_STRING({value})";
 
-		return $"COALESCE(CONCAT(\"{ValueSeparator}\", MV_CONCAT({text}, \"{ValueSeparator}\"), \"{ValueSeparator}\"), \"{ValueSeparator}\")";
-	}
-
-	/// <summary>
-	/// A stored value may hold the separator itself, which would split it into two
-	/// synthetic values and match a pattern the real value does not. The joined string
-	/// carries one separator per value plus one, so any excess gives the collision away.
-	/// </summary>
-	private void AppendEncodingGuard(string field, bool isString) =>
-		_ = _builder.Append(EncodingGuard(field, isString));
-
-	private string EncodingGuard(string field, bool isString)
-	{
-		var joined = JoinedValues(field, isString);
-
-		return $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{ValueSeparator}\", \"\"))) "
-			+ $"== COALESCE(MV_COUNT({field}), 0) + 1";
-	}
-
-	/// <summary>Escapes the characters Lucene regular expressions reserve.</summary>
-	private static string EscapeRegex(string value)
-	{
-		const string reserved = "\\.?+*|{}[]()\"#@&<>~";
-		var builder = new StringBuilder(value.Length);
-
-		foreach (var c in value)
+		switch (kind)
 		{
-			if (reserved.Contains(c))
-				_ = builder.Append('\\');
+			case ElementPredicateKind.StartsWith:
+				_ = _builder.Append("STARTS_WITH(").Append(text).Append(", \"")
+					.Append(EscapeStringLiteral(values[0])).Append("\")");
+				break;
 
-			_ = builder.Append(c);
+			case ElementPredicateKind.EndsWith:
+				_ = _builder.Append("ENDS_WITH(").Append(text).Append(", \"")
+					.Append(EscapeStringLiteral(values[0])).Append("\")");
+				break;
+
+			case ElementPredicateKind.Contains:
+				_ = _builder.Append(text).Append(" LIKE \"*").Append(EscapeLikePattern(values[0])).Append("*\"");
+				break;
+
+			case ElementPredicateKind.In:
+				_ = _builder.Append('(');
+
+				for (var i = 0; i < values.Count; i++)
+				{
+					if (i > 0)
+						_ = _builder.Append(" OR ");
+
+					_ = _builder.Append(text).Append(" == \"").Append(EscapeStringLiteral(values[i])).Append('"');
+				}
+
+				_ = _builder.Append(')');
+				break;
+
+			default:
+				_ = _builder.Append(text).Append(" == \"").Append(EscapeStringLiteral(values[0])).Append('"');
+				break;
 		}
-
-		return builder.ToString();
 	}
+
+	/// <summary>Escapes what a double-quoted ES|QL string literal reserves.</summary>
+	private static string EscapeStringLiteral(string value) =>
+		value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
 	private bool TryAppendMatch(Expression field, Expression value)
 	{

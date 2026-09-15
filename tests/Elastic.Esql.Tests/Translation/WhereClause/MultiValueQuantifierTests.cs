@@ -1,4 +1,4 @@
-﻿// Licensed to Elasticsearch B.V under one or more agreements.
+// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -10,37 +10,22 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 /// </summary>
 public class MultiValueQuantifierTests : EsqlTestBase
 {
-	// the unit separator joins the values when a regular expression looks at them
-	private const string Sep = "";
+	// how many positions the translation reads, one MV_SLICE each
+	private const int Positions = 32;
 
-	private static string Joined(string field) =>
-		$"COALESCE(CONCAT(\"{Sep}\", MV_CONCAT({field}, \"{Sep}\"), \"{Sep}\"), \"{Sep}\")";
+	/// <summary>Any: the test holds at some position; an absent value does not count.</summary>
+	private static string AnyOf(string field, Func<string, string> test) =>
+		"(" + string.Join(" OR ", Enumerable.Range(0, Positions)
+			.Select(position => $"COALESCE({test($"MV_SLICE({field}, {position}, {position})")}, false)")) + ")";
 
-	/// <summary>
-	/// A negated predicate: the encoding guard stays outside the NOT, since a row whose
-	/// values collide with the separator has to be excluded either way.
-	/// </summary>
-	private static string Negated(string field, string pattern, string? counted = null)
-	{
-		var joined = Joined(field);
-		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{Sep}\", \"\")))";
-
-		return $"({separators} == COALESCE(MV_COUNT({counted ?? field}), 0) + 1 "
-			+ $"AND NOT {joined} RLIKE \"\"\"{pattern}\"\"\")";
-	}
-
-	/// <summary>
-	/// The whole emitted predicate: the guard that catches a stored value holding the
-	/// separator, and then the pattern itself.
-	/// </summary>
-	private static string Matching(string field, string pattern, string? counted = null)
-	{
-		var joined = Joined(field);
-		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{Sep}\", \"\")))";
-
-		return $"({separators} == COALESCE(MV_COUNT({counted ?? field}), 0) + 1 "
-			+ $"AND {joined} RLIKE \"\"\"{pattern}\"\"\")";
-	}
+	/// <summary>All: the test holds at every position that has a value.</summary>
+	private static string AllOf(string field, Func<string, string> test) =>
+		"(" + string.Join(" AND ", Enumerable.Range(0, Positions)
+			.Select(position =>
+			{
+				var value = $"MV_SLICE({field}, {position}, {position})";
+				return $"COALESCE({value} IS NULL OR {test(value)}, true)";
+			})) + ")";
 
 	[Test]
 	public void Any_StartsWith_MatchesSomeValue()
@@ -51,10 +36,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $".*{Sep}wat[^{Sep}]*{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -66,10 +51,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $".*{Sep}[^{Sep}]*al{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE {{AnyOf("tags", value => $"ENDS_WITH({value}, \"al\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -81,26 +66,25 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*at*\"")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
 	public void All_StartsWith_RequiresEveryValueToMatch()
 	{
-		// the joined string must be a run of matching values; the empty field is one too
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.All(t => t.StartsWith("i")))
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
-            """".NativeLineEndings());
+            | WHERE {{AllOf("tags", value => $"STARTS_WITH({value}, \"i\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -112,10 +96,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Negated("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
-            """".NativeLineEndings());
+            | WHERE NOT {{AllOf("tags", value => $"STARTS_WITH({value}, \"i\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -127,10 +111,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Negated("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE NOT {{AnyOf("tags", value => $"{value} LIKE \"*at*\"")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -159,10 +143,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $".*{Sep}wat[^{Sep}]*{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -174,10 +158,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Negated("tags", $"({Sep}wat[^{Sep}]*)*{Sep}")}}
-            """".NativeLineEndings());
+            | WHERE NOT {{AllOf("tags", value => $"STARTS_WITH({value}, \"wat\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -208,10 +192,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $"({Sep}(iot|water))*{Sep}")}}
-            """".NativeLineEndings());
+            | WHERE {{AllOf("tags", value => $"({value} == \"iot\" OR {value} == \"water\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -225,37 +209,39 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("TO_STRING(ratings)", $"({Sep}(5|42))*{Sep}", "ratings")}}
-            """".NativeLineEndings());
+            | WHERE {{AllOf("ratings", value => $"(TO_STRING({value}) == \"5\" OR TO_STRING({value}) == \"42\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void ReservedRegexCharacters_AreEscaped()
+	public void ReservedCharactersInTheValue_AreEscaped()
 	{
+		// a quote would otherwise end the ES|QL string literal
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Any(t => t.StartsWith("a.b(c)|d")))
+			.Where(p => p.Tags.Any(t => t.StartsWith("a\"b")))
 			.ToString();
 
 		_ = esql.Should().Be(
-			$$""""
+			$$"""
             FROM products
-            | WHERE {{Matching("tags", $@".*{Sep}a\.b\(c\)\|d[^{Sep}]*{Sep}.*")}}
-            """".NativeLineEndings());
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"a\\\"b\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void AValueHoldingTheSeparator_IsRefused()
+	public void AValueHoldingAControlCharacter_NeedsNoSpecialCase()
 	{
-		var query = CreateQuery<TaggedProduct>()
+		// the values are never joined, so no character of the data can be mistaken
+		// for a delimiter
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Any(t => t.StartsWith("a" + Sep + "b")));
+			.Where(p => p.Tags.Any(t => t.StartsWith("ab")))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = esql.Should().Contain("MV_SLICE(tags, 0, 0)");
 	}
 
 	[Test]
@@ -334,19 +320,6 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Any_WithAPredicateThatCannotBeTranslated_StillThrows()
-	{
-		// nothing approximate: an unknown predicate keeps the existing behaviour
-		var query = CreateQuery<TaggedProduct>()
-			.From("products")
-			.Where(p => p.Tags.Any(t => t.Length > 3));
-
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>();
-	}
-
-	[Test]
 	public void ANegatedQuantifierStaysDefinedOverAMissingField()
 	{
 		// MV_MAX is null over a missing field, so the predicate has to say explicitly
@@ -380,29 +353,32 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
-	public void TwoGuardedPredicatesUnderOneNegation_KeepBothGuards()
+	public void TwoPredicatesUnderOneNegation_StayDefinite()
 	{
-		// one guard per field, and neither may end up inside the NOT
+		// every position answers true or false on its own, so the conjunction under
+		// the NOT is definite without any enclosing guard
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => !(p.Tags.Any(t => t.StartsWith("a")) && p.Categories.Any(c => c.StartsWith("b"))))
 			.ToString();
 
-		_ = esql.Should().Contain("MV_COUNT(tags)");
-		_ = esql.Should().Contain("MV_COUNT(categories)");
-		_ = esql.Should().Contain(" AND NOT (");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE NOT ({{AnyOf("tags", value => $"STARTS_WITH({value}, \"a\")")}} AND {{AnyOf("categories", value => $"STARTS_WITH({value}, \"b\")")}})
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void NestedNegations_KeepTheGuardOutsideBoth()
+	public void Any_WithAPredicateThatCannotBeTranslated_StillThrows()
 	{
-		var esql = CreateQuery<TaggedProduct>()
+		// nothing approximate: an unknown predicate keeps the existing behaviour
+		var query = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => !!p.Tags.Any(t => t.StartsWith("a")))
-			.ToString();
+			.Where(p => p.Tags.Any(t => t.Length > 3));
 
-		// the guard leads, the two negations follow
-		_ = esql.Should().Contain("| WHERE ((LENGTH(");
-		_ = esql.Should().Contain(" AND NOT NOT ");
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 }
