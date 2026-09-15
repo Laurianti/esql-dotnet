@@ -470,4 +470,31 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Contain("?prefix");
 		_ = esql.Should().NotContain("?prefix1");
 	}
+
+	[Test]
+	public void ALiteralValue_StaysInline()
+	{
+		// only a captured variable becomes a parameter; a literal written in the query
+		// has no name to give it
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("water"))
+			.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Contain("MATCH(tags, \"water\")");
+	}
+
+	[Test]
+	public void ACapturedContainsPattern_BecomesAParameter()
+	{
+		var fragment = "ate";
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains(fragment)))
+			.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Contain("LIKE ?fragment");
+		_ = esql.Should().NotContain("*ate*");
+	}
 }

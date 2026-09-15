@@ -987,17 +987,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& binary.NodeType == comparison
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
 
-	/// <summary>
-	/// The constant a predicate compares a field value against. Null is refused: a
-	/// multi-value field stores no null element, so there is nothing to match, and
-	/// MATCH(field, null) is not valid ES|QL.
-	/// </summary>
 	/// <summary>The captured variable an expression reads, when it reads one.</summary>
 	private static string? CapturedName(Expression expression) =>
 		expression is MemberExpression { Expression: ConstantExpression or MemberExpression } member
 			? member.Member.Name
 			: null;
 
+	/// <summary>
+	/// The constant a predicate compares a field value against. Null is refused: a
+	/// multi-value field stores no null element, so there is nothing to match, and
+	/// MATCH(field, null) is not valid ES|QL.
+	/// </summary>
 	private static bool TryGetConstant(Expression expression, out object? value)
 	{
 		try
@@ -1098,6 +1098,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// A LIKE pattern built around a value: a query parameter when the value came from a
+	/// captured variable, so the pattern is not embedded in the query text either.
+	/// </summary>
+	private string RenderPattern(ElementPredicate predicate, int index, string pattern)
+	{
+		var name = predicate.Names is { } names && index < names.Count ? names[index] : null;
+
+		return name is null
+			? EsqlFormatting.FormatString(pattern)
+			: _context.GetValueOrParameterName(name, pattern);
+	}
+
+	/// <summary>
 	/// A value of an element predicate, as a query parameter when it came from a
 	/// captured variable and <c>InlineParameters</c> is off, and as a literal otherwise.
 	/// </summary>
@@ -1163,7 +1176,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// against the value itself.
 		var rendered = values
 			.Select((value, index) => predicate.Kind == ElementPredicateKind.Contains
-				? EsqlFormatting.FormatString("*" + EscapeLikeMetacharacters(value) + "*")
+				? RenderPattern(predicate, index, "*" + EscapeLikeMetacharacters(value) + "*")
 				: isString
 					? RenderValue(predicate, index)
 					: EsqlFormatting.FormatString(value))
@@ -1250,7 +1263,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!TryGetConstant(value, out var constant))
 			return false;
 
-		AppendMatch(ResolveMultiValueField(field), _context.GetValueOrParameterName(CapturedName(value) ?? "value", constant));
+		var name = CapturedName(value);
+
+		AppendMatch(
+			ResolveMultiValueField(field),
+			name is null
+				? _context.FormatValue(constant, null)
+				: _context.GetValueOrParameterName(name, constant));
 		return true;
 	}
 
