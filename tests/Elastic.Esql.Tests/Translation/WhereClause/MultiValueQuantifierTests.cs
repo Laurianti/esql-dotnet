@@ -594,6 +594,38 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
+	public void OfTwoLimits_EachPredicateReadsTheNearestPrecedingOne()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(2)
+			.Where(p => p.Tags.Any(t => t.StartsWith("a")))
+			.MultiValueLimit(3)
+			.Where(p => p.Tags.Any(t => t.EndsWith("b")))
+			.ToString();
+
+		var first = esql.IndexOf("CASE(MV_COUNT(tags) > 2, NULL,", StringComparison.Ordinal);
+		var second = esql.IndexOf("CASE(MV_COUNT(tags) > 3, NULL,", StringComparison.Ordinal);
+
+		_ = first.Should().BePositive();
+		_ = second.Should().BeGreaterThan(first);
+	}
+
+	[Test]
+	public void OfTwoLimitsInARow_TheLaterOneWins()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(2)
+			.MultiValueLimit(3)
+			.Where(p => p.Tags.Any(t => t.StartsWith("a")))
+			.ToString();
+
+		_ = esql.Should().Contain("CASE(MV_COUNT(tags) > 3, NULL,");
+		_ = esql.Should().NotContain("> 2");
+	}
+
+	[Test]
 	public void TheStatedLimit_CarriesIntoAForkBranch()
 	{
 		var esql = CreateQuery<TaggedProduct>()

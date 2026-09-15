@@ -71,7 +71,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 		var isEsqlExtensionMethod = declaringType == typeof(EsqlQueryableExtensions);
 
 		// A statement about the data rather than a step of the query: read before the
-		// source, so that it holds wherever in the chain it was written.
+		// source, so that it holds for what precedes it in the chain as well.
 		if (isEsqlExtensionMethod && methodName == nameof(EsqlQueryableExtensions.MultiValueLimit))
 			VisitMultiValueLimit(node);
 
@@ -90,7 +90,9 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				break;
 
 			case nameof(EsqlQueryableExtensions.MultiValueLimit) when isEsqlExtensionMethod:
-				// already read, before the source
+				// read again after the source: of two statements, the later one holds for
+				// what follows it, rather than the inner one lingering from the source visit
+				VisitMultiValueLimit(node);
 				break;
 
 			case nameof(Queryable.Select) when isQueryableMethod:
