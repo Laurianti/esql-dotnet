@@ -551,10 +551,18 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (call.Method.DeclaringType != typeof(string) || call.Method.Name is not ("CompareTo" or "Compare"))
 			return false;
 
+		// Only the plain string overloads carry the ordering ES|QL performs. Anything
+		// else, such as a StringComparison or a culture, asks for a comparison the
+		// translation cannot honour, so it is left unsupported rather than ignored.
+		var parameters = call.Method.GetParameters();
+
+		if (parameters.Any(parameter => parameter.ParameterType != typeof(string)))
+			return false;
+
 		// instance form: a.CompareTo(b); static form: string.Compare(a, b)
 		var (first, second) = call.Object is not null
-			? (call.Object, call.Arguments[0])
-			: call.Arguments.Count >= 2 ? (call.Arguments[0], call.Arguments[1]) : (null, null);
+			? parameters.Length == 1 ? (call.Object, call.Arguments[0]) : (null, null)
+			: parameters.Length == 2 ? (call.Arguments[0], call.Arguments[1]) : (null, null);
 
 		if (first is null || second is null)
 			return false;
@@ -754,11 +762,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return true;
 		}
 
-		var argument = node.Arguments[^1];
-
-		// field.Contains(value)
+		// field.Contains(value), and only that overload: one taking a comparer asks
+		// for a comparison the translation cannot honour
 		if (methodName == "Contains")
-			return TryAppendMatch(source, argument);
+		{
+			var expectedArguments = node.Method.IsStatic ? 2 : 1;
+
+			return node.Arguments.Count == expectedArguments
+				&& TryAppendMatch(source, node.Arguments[^1]);
+		}
+
+		var argument = node.Arguments[^1];
 
 		if (StripQuotes(argument) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
@@ -869,12 +883,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& binary.NodeType == comparison
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
 
+	/// <summary>
+	/// The constant a predicate compares a field value against. Null is refused: a
+	/// multi-value field stores no null element, so there is nothing to match, and
+	/// MATCH(field, null) is not valid ES|QL.
+	/// </summary>
 	private static bool TryGetConstant(Expression expression, out object? value)
 	{
 		try
 		{
 			value = GetConstantValue(expression);
-			return true;
+			return value is not null;
 		}
 		catch (NotSupportedException)
 		{
@@ -1018,17 +1037,25 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		// Any: some value, between two separators, matches.
-		// All: the whole string is a run of matching values; "␟" alone, the empty field, is one too.
+		// All: the whole string is a run of matching values; the lone separator, which
+		// stands for the empty field, is one of those runs too.
 		var pattern = all
 			? "(" + ValueSeparator + valuePattern + ")*" + ValueSeparator
 			: ".*" + ValueSeparator + valuePattern + ValueSeparator + ".*";
 
-		var joined = isString ? field : "TO_STRING(" + field + ")";
+		var text = isString ? field : "TO_STRING(" + field + ")";
+		var joined = $"COALESCE(CONCAT(\"{ValueSeparator}\", MV_CONCAT({text}, \"{ValueSeparator}\"), \"{ValueSeparator}\"), \"{ValueSeparator}\")";
+
+		// A stored value may hold the separator itself, which would split it into two
+		// synthetic values and match a pattern the real value does not. The joined
+		// string carries one separator per value plus one, so any excess gives the
+		// collision away, and such a document is left out rather than answered wrongly.
+		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{ValueSeparator}\", \"\")))";
 
 		_ = _builder
-			.Append("COALESCE(CONCAT(\"").Append(ValueSeparator).Append("\", MV_CONCAT(").Append(joined)
-			.Append(", \"").Append(ValueSeparator).Append("\"), \"").Append(ValueSeparator).Append("\"), \"").Append(ValueSeparator)
-			.Append("\") RLIKE \"\"\"").Append(pattern).Append("\"\"\"");
+			.Append('(').Append(separators)
+			.Append(" == COALESCE(MV_COUNT(").Append(field).Append("), 0) + 1 AND ")
+			.Append(joined).Append(" RLIKE \"\"\"").Append(pattern).Append("\"\"\")");
 
 		return true;
 	}

@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -342,27 +342,67 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 		// the guarded side is either the lambda parameter itself, or a member path
 		// rooted in it: "param == null" and "param.Child == null" are both guards
-		if (!(IsParameterRooted(left) && IsNullConstant(right))
-			&& !(IsParameterRooted(right) && IsNullConstant(left)))
+		var guarded = IsParameterRooted(left) && IsNullConstant(right) ? left
+			: IsParameterRooted(right) && IsNullConstant(left) ? right
+			: null;
+
+		if (guarded is null)
 			return false;
+
+		Expression branch;
 
 		if (test.NodeType == ExpressionType.Equal)
 		{
 			if (!IsNullConstant(StripNullableConvert(conditional.IfTrue)))
 				return false;
 
-			nonNullBranch = StripNullableConvert(conditional.IfFalse);
+			branch = StripNullableConvert(conditional.IfFalse);
 		}
 		else
 		{
 			if (!IsNullConstant(StripNullableConvert(conditional.IfFalse)))
 				return false;
 
-			nonNullBranch = StripNullableConvert(conditional.IfTrue);
+			branch = StripNullableConvert(conditional.IfTrue);
 		}
 
+		// the guard only stands for the branch when the branch reads through the very
+		// path that was tested: "p.Supplier == null ? null : p.Name" keeps its own
+		// condition, or the emitted CASE would test the wrong field
+		if (guarded is MemberExpression && !ReadsThrough(branch, guarded))
+			return false;
+
+		nonNullBranch = branch;
 		return true;
 	}
+
+	/// <summary>Whether every member path in the expression goes through <paramref name="path"/>.</summary>
+	private static bool ReadsThrough(Expression expression, Expression path)
+	{
+		if (SameMemberPath(expression, path))
+			return true;
+
+		return expression switch
+		{
+			MemberExpression member => member.Expression is not null && ReadsThrough(member.Expression, path),
+			UnaryExpression unary => ReadsThrough(unary.Operand, path),
+			MemberInitExpression init => init.Bindings.OfType<MemberAssignment>().All(b => ReadsThrough(b.Expression, path))
+				&& ReadsThrough(init.NewExpression, path),
+			NewExpression @new => @new.Arguments.All(a => ReadsThrough(a, path)),
+			MethodCallExpression call => call.Object is not null && ReadsThrough(call.Object, path),
+			ConstantExpression => true,
+			_ => false
+		};
+	}
+
+	private static bool SameMemberPath(Expression left, Expression right) => (left, right) switch
+	{
+		(ParameterExpression a, ParameterExpression b) => a == b,
+		(MemberExpression a, MemberExpression b) => a.Member == b.Member
+			&& a.Expression is not null && b.Expression is not null
+			&& SameMemberPath(a.Expression, b.Expression),
+		_ => false
+	};
 
 	/// <summary>An expression that is the lambda parameter, or a member path rooted in it.</summary>
 	private static bool IsParameterRooted(Expression expression) => expression switch

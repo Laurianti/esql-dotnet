@@ -16,6 +16,19 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	private static string Joined(string field) =>
 		$"COALESCE(CONCAT(\"{Sep}\", MV_CONCAT({field}, \"{Sep}\"), \"{Sep}\"), \"{Sep}\")";
 
+	/// <summary>
+	/// The whole emitted predicate: the guard that catches a stored value holding the
+	/// separator, and then the pattern itself.
+	/// </summary>
+	private static string Matching(string field, string pattern, string? counted = null)
+	{
+		var joined = Joined(field);
+		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{Sep}\", \"\")))";
+
+		return $"({separators} == COALESCE(MV_COUNT({counted ?? field}), 0) + 1 "
+			+ $"AND {joined} RLIKE \"\"\"{pattern}\"\"\")";
+	}
+
 	[Test]
 	public void Any_StartsWith_MatchesSomeValue()
 	{
@@ -27,7 +40,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}wat[^{{Sep}}]*{{Sep}}.*"""
+            | WHERE {{Matching("tags", $".*{Sep}wat[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -42,7 +55,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*al{{Sep}}.*"""
+            | WHERE {{Matching("tags", $".*{Sep}[^{Sep}]*al{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -57,7 +70,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*at[^{{Sep}}]*{{Sep}}.*"""
+            | WHERE {{Matching("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -73,7 +86,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """({{Sep}}i[^{{Sep}}]*)*{{Sep}}"""
+            | WHERE {{Matching("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
             """".NativeLineEndings());
 	}
 
@@ -88,7 +101,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Joined("tags")}} RLIKE """({{Sep}}i[^{{Sep}}]*)*{{Sep}}"""
+            | WHERE NOT {{Matching("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
             """".NativeLineEndings());
 	}
 
@@ -103,7 +116,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Joined("tags")}} RLIKE """.*{{Sep}}[^{{Sep}}]*at[^{{Sep}}]*{{Sep}}.*"""
+            | WHERE NOT {{Matching("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -135,7 +148,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}wat[^{{Sep}}]*{{Sep}}.*"""
+            | WHERE {{Matching("tags", $".*{Sep}wat[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -150,7 +163,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Joined("tags")}} RLIKE """({{Sep}}wat[^{{Sep}}]*)*{{Sep}}"""
+            | WHERE NOT {{Matching("tags", $"({Sep}wat[^{Sep}]*)*{Sep}")}}
             """".NativeLineEndings());
 	}
 
@@ -184,7 +197,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """({{Sep}}(iot|water))*{{Sep}}"""
+            | WHERE {{Matching("tags", $"({Sep}(iot|water))*{Sep}")}}
             """".NativeLineEndings());
 	}
 
@@ -201,7 +214,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("TO_STRING(ratings)")}} RLIKE """({{Sep}}(5|42))*{{Sep}}"""
+            | WHERE {{Matching("TO_STRING(ratings)", $"({Sep}(5|42))*{Sep}", "ratings")}}
             """".NativeLineEndings());
 	}
 
@@ -216,7 +229,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE {{Joined("tags")}} RLIKE """.*{{Sep}}a\.b\(c\)\|d[^{{Sep}}]*{{Sep}}.*"""
+            | WHERE {{Matching("tags", $@".*{Sep}a\.b\(c\)\|d[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -246,7 +259,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
-	public void All_GreaterThan_ComparesTheSmallestValue()
+	public void All_GreaterThanOrEqual_ComparesTheSmallestValue()
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -257,6 +270,21 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			"""
             FROM products
             | WHERE (ratings IS NULL OR MV_MIN(ratings) >= 3)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void All_GreaterThan_ComparesTheSmallestValue()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.All(r => r > 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
             """.NativeLineEndings());
 	}
 

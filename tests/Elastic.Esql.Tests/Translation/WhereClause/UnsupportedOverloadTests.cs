@@ -1,0 +1,76 @@
+// Licensed to Elasticsearch B.V under one or more agreements.
+// Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
+// See the LICENSE file in the project root for more information
+
+namespace Elastic.Esql.Tests.Translation.WhereClause;
+
+/// <summary>
+/// Overloads and values the translation cannot honour. Each one has to be refused
+/// rather than translated into a predicate that quietly means something else.
+/// </summary>
+public class UnsupportedOverloadTests : EsqlTestBase
+{
+	[Test]
+	public void CompareWithAStringComparison_IsRefused()
+	{
+		// dropping the comparison mode would silently make the predicate case-sensitive
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, "m", StringComparison.OrdinalIgnoreCase) > 0);
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void CompareToAnObject_IsRefused()
+	{
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.CompareTo((object)"m") > 0);
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void ContainsWithAComparer_IsRefused()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("x", StringComparer.OrdinalIgnoreCase));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void AnElementComparedToNull_IsRefused()
+	{
+		// a multi-value field stores no null element, and MATCH(field, null) is not valid
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == null));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void AllElementsComparedToNull_IsRefused()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => t != null));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+
+	[Test]
+	public void ContainsNull_IsRefused()
+	{
+		string? missing = null;
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains(missing!));
+
+		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+	}
+}
