@@ -23,7 +23,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private readonly StringBuilder _builder = new();
 	private MemberInfo? _comparisonPropertyContext;
 	private bool _insideNegation;
-	private string? _pendingEncodingGuard;
+	private readonly List<string> _pendingEncodingGuards = [];
 
 	/// <summary>
 	/// Translates a predicate expression to an ES|QL condition string.
@@ -193,28 +193,37 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				// first, so the guard it asks for can be placed ahead of the NOT.
 				var start = _builder.Length;
 				var wasNegated = _insideNegation;
-				var outerGuard = _pendingEncodingGuard;
+				var outerGuards = _pendingEncodingGuards.Count;
 
 				_insideNegation = true;
-				_pendingEncodingGuard = null;
 
 				_ = Visit(node.Operand);
 
 				var translated = _builder.ToString(start, _builder.Length - start);
 				_ = _builder.Remove(start, _builder.Length - start);
 
-				if (_pendingEncodingGuard is null)
+				// every guard the operand asked for belongs in front of this negation,
+				// not underneath it
+				var guards = _pendingEncodingGuards.Skip(outerGuards).ToList();
+				_pendingEncodingGuards.RemoveRange(outerGuards, _pendingEncodingGuards.Count - outerGuards);
+
+				if (guards.Count == 0)
 				{
+					_ = _builder.Append("NOT ").Append(translated);
+				}
+				else if (wasNegated)
+				{
+					// an enclosing negation will place them, so they travel further out
+					_pendingEncodingGuards.AddRange(guards);
 					_ = _builder.Append("NOT ").Append(translated);
 				}
 				else
 				{
-					_ = _builder.Append('(').Append(_pendingEncodingGuard)
+					_ = _builder.Append('(').Append(string.Join(" AND ", guards.Distinct()))
 						.Append(" AND NOT ").Append(translated).Append(')');
 				}
 
 				_insideNegation = wasNegated;
-				_pendingEncodingGuard = outerGuard;
 				break;
 			}
 
@@ -994,7 +1003,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// it in front of the negation instead of underneath it
 		if (_insideNegation && UsesValuePattern(elementType, effectiveAll, predicate))
 		{
-			_pendingEncodingGuard = EncodingGuard(name0, elementType == typeof(string));
+			_pendingEncodingGuards.Add(EncodingGuard(name0, elementType == typeof(string)));
 			guardsEncoding = true;
 		}
 		else if (guardsEncoding)
@@ -1080,7 +1089,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				if (!TryAppendValuePattern(name, elementType, all, predicate, guardsEncoding))
 					return false;
 
-				if (guardsEncoding && _pendingEncodingGuard is null)
+				if (guardsEncoding && !_insideNegation)
 					_ = _builder.Append(')');
 
 				return true;
@@ -1088,7 +1097,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
-	/// <summary>Whether the predicate is answered by a regular expression over the joined values.</summary>
 	/// <summary>
 	/// Whether the predicate is answered by a regular expression over the joined values,
 	/// which is what needs the encoding guard. Equality and membership are answered by
@@ -1164,7 +1172,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			? "(" + ValueSeparator + valuePattern + ")*" + ValueSeparator
 			: ".*" + ValueSeparator + valuePattern + ValueSeparator + ".*";
 
-		var text = isString ? field : "TO_STRING(" + field + ")";
 		var joined = JoinedValues(field, isString);
 
 		if (!guardAlreadyEmitted)

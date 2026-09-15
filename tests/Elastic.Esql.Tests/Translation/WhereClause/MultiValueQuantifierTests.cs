@@ -378,4 +378,31 @@ public class MultiValueQuantifierTests : EsqlTestBase
             | WHERE NOT COALESCE(MV_COUNT(tags), 0) > 0
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void TwoGuardedPredicatesUnderOneNegation_KeepBothGuards()
+	{
+		// one guard per field, and neither may end up inside the NOT
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !(p.Tags.Any(t => t.StartsWith("a")) && p.Categories.Any(c => c.StartsWith("b"))))
+			.ToString();
+
+		_ = esql.Should().Contain("MV_COUNT(tags)");
+		_ = esql.Should().Contain("MV_COUNT(categories)");
+		_ = esql.Should().Contain(" AND NOT (");
+	}
+
+	[Test]
+	public void NestedNegations_KeepTheGuardOutsideBoth()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !!p.Tags.Any(t => t.StartsWith("a")))
+			.ToString();
+
+		// the guard leads, the two negations follow
+		_ = esql.Should().Contain("| WHERE ((LENGTH(");
+		_ = esql.Should().Contain(" AND NOT NOT ");
+	}
 }
