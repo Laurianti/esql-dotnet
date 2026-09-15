@@ -765,8 +765,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// How many values of a multi-value field a predicate inspects, one position at a
 	/// time. MV_SLICE reads a value by position, so the number of positions has to be
-	/// fixed when the query is written; a field holding more values than this is
-	/// answered from the positions that are read.
+	/// fixed when the query is written; a field holding more values than this cannot be
+	/// decided from the positions read, and the predicate is null for it.
 	/// </summary>
 	private const int MaxInspectedValues = 32;
 
@@ -1076,11 +1076,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// reads a value by position, so the test is written out once per position and
 	/// combined: any of them for Any, all of them for All.
 	/// <para>
-	/// Only the first <see cref="MaxInspectedValues"/> positions are read, and a field
-	/// holding more values than that is answered from those positions alone. Bounding it
-	/// inside the predicate would not help: a condition on MV_COUNT is flipped by an
-	/// enclosing NOT like everything else, and there is no way to test the remaining
-	/// values, since a scalar function over a multi-value field yields null.
+	/// Only the first <see cref="MaxInspectedValues"/> positions are read, so a field
+	/// holding more values than that cannot be decided from them. The predicate is null
+	/// for such a field rather than false, since false would let an enclosing NOT turn it
+	/// into a match, and WHERE drops a null row either way.
 	/// </para>
 	/// </summary>
 	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)
