@@ -1,4 +1,4 @@
-﻿// Licensed to Elasticsearch B.V under one or more agreements.
+// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -163,6 +163,73 @@ public class StringComparisonTests : EsqlTestBase
 			"""
             FROM logs-*
             | WHERE clientIp < "m"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void StaticCompareWithTheNullableFieldOnTheRight_GuardsTheOtherWay()
+	{
+		// null sorts first, so "m" compared against a missing value is above it: the
+		// row is out for "<" and in for ">", the mirror of the field on the left
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare("m", l.ClientIp, StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp IS NOT NULL AND "m" < clientIp)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void StaticCompareAboveTheNullableFieldOnTheRight_KeepsTheMissingValue()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare("m", l.ClientIp, StringComparison.Ordinal) > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp IS NULL OR "m" > clientIp)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void CompareToWithANullableArgument_GuardsTheArgument()
+	{
+		// "m".CompareTo(null) is positive in .NET: the receiver is above a missing
+		// argument, so the missing value stays in for ">" even though the instance form
+		// has no ordering for a missing receiver
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.CompareTo(l.ClientIp) > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp IS NULL OR message > clientIp)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void ANullableFieldDeclaredThroughTheTypeContext_IsStillGuarded()
+	{
+		// every member of OptionalDocument is nullable, so the compiler records that once
+		// on the type and not on the member: the guard has to be found there too
+		var esql = CreateQuery<OptionalDocument>()
+			.From("docs")
+			.Where(d => string.Compare(d.ClientIp, "m", StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM docs
+            | WHERE (clientIp IS NULL OR clientIp < "m")
             """.NativeLineEndings());
 	}
 }

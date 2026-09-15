@@ -1,4 +1,4 @@
-﻿// Licensed to Elasticsearch B.V under one or more agreements.
+// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -204,9 +204,10 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
-	public void ASetWithDefaultEquality_IsStillTranslated()
+	public void AListWithDefaultEquality_IsStillTranslated()
 	{
-		var wanted = new HashSet<string> { "iot" };
+		// a list has no equality of its own, so membership is plain equality
+		var wanted = new List<string> { "iot" };
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -214,6 +215,22 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
+	}
+
+	[Test]
+	public void ASetWithDefaultEquality_IsRefusedAllTheSame()
+	{
+		// reading a set's comparer back takes reflection the trimmer cannot see through,
+		// so the whole family is left untranslated rather than answered on a guess
+		var wanted = new HashSet<string> { "iot" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -230,5 +247,43 @@ public class UnsupportedOverloadTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void CompareBetweenTwoNullableFields_IsRefused()
+	{
+		// two absent values have no single ES|QL form for their ordering
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.ClientIp, l.ServerName, StringComparison.Ordinal) < 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*both be missing*");
+	}
+
+	[Test]
+	public void CompareWithAnIgnoreCaseFlag_IsRefusedForTheRightReason()
+	{
+		// the shape is the supported one, only the overload is not: the message says so
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, "m", true) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*overload*");
+	}
+
+	[Test]
+	public void CompareAgainstNull_IsRefusedForTheRightReason()
+	{
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, null, StringComparison.Ordinal) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*IS NULL*");
 	}
 }

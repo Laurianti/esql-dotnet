@@ -13,6 +13,7 @@ namespace Elastic.Esql.Tests;
 
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TaggedProduct))]
+[JsonSerializable(typeof(OptionalDocument))]
 [JsonSerializable(typeof(SimpleDocument))]
 [JsonSerializable(typeof(MetricDocument))]
 [JsonSerializable(typeof(EventDocument))]
@@ -48,6 +49,17 @@ public class BookProjection
 	public string Id { get; set; } = string.Empty;
 	public string Title { get; set; } = string.Empty;
 	public float Score { get; set; }
+}
+
+/// <summary>
+/// Document whose members are all nullable: the compiler then records the annotation
+/// once on the type, as a NullableContext, rather than on each member.
+/// </summary>
+public class OptionalDocument
+{
+	public string? Message { get; set; }
+
+	public string? ClientIp { get; set; }
 }
 
 /// <summary>

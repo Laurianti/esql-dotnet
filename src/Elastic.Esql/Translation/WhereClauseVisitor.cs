@@ -1,4 +1,4 @@
-﻿// Licensed to Elasticsearch B.V under one or more agreements.
+// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -616,28 +616,28 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		var parameters = call.Method.GetParameters();
 
-		// the values compared have to be strings: CompareTo(object) orders something else,
-		// and the shape is already the supported one, so the refusal comes from here
-		// rather than from the generic "only supported when compared to zero" message
-		if (parameters.Take(call.Object is not null ? 1 : 2).Any(parameter => parameter.ParameterType != typeof(string)))
+		// From here the shape is the supported one, so anything refused is refused with
+		// its own reason rather than the generic "only when compared to zero" message.
+		var instanceForm = call.Object is not null;
+		var supportedOverload = instanceForm
+			? parameters.Length == 1 && parameters[0].ParameterType == typeof(string)
+			: parameters.Length is 2 or 3
+				&& parameters[0].ParameterType == typeof(string)
+				&& parameters[1].ParameterType == typeof(string)
+				&& (parameters.Length == 2 || parameters[2].ParameterType == typeof(StringComparison));
+
+		if (!supportedOverload)
 		{
 			throw new NotSupportedException(
-				$"String method {call.Method.Name} is only supported when comparing two strings; "
-				+ "an overload taking another type orders something ES|QL does not.");
+				$"String method {call.Method.Name} is only supported when comparing two strings, "
+				+ "optionally with a StringComparison; an overload taking a culture, an ignore-case "
+				+ "flag, a range or a non-string operand orders something ES|QL does not.");
 		}
 
-		// instance form: a.CompareTo(b); static form: string.Compare(a, b), with an
-		// optional StringComparison that has to be an ordinal one
-		var (first, second, comparison) = call.Object is not null
-			? parameters.Length == 1 ? (call.Object, call.Arguments[0], (Expression?)null) : (null, null, null)
-			: parameters.Length is 2 or 3 ? (call.Arguments[0], call.Arguments[1], parameters.Length == 3 ? call.Arguments[2] : null)
-			: (null, null, null);
-
-		if (first is null || second is null)
-			return false;
-
-		if (parameters.Length == 3 && parameters[2].ParameterType != typeof(StringComparison))
-			return false;
+		var (first, second) = instanceForm
+			? (call.Object!, call.Arguments[0])
+			: (call.Arguments[0], call.Arguments[1]);
+		var comparison = parameters.Length == 3 ? call.Arguments[2] : null;
 
 		// ES|QL orders keyword values by their UTF-8 bytes, which an explicitly ordinal
 		// comparison asks for; a culture-sensitive one asks for something else and is
@@ -652,9 +652,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		// .NET orders a non-null string above null, which a plain ES|QL comparison
-		// against null does not reproduce
+		// against null does not reproduce; there is a field to test for null instead
 		if (ResolvesToNullConstant(first) || ResolvesToNullConstant(second))
-			return false;
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} against null is not supported: compare the "
+				+ "field with null directly, which ES|QL answers with IS NULL.");
+		}
 
 		var op = node.NodeType switch
 		{
@@ -664,39 +668,41 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => flipped ? ">=" : "<="
 		};
 
-		// string.Compare orders a null operand before everything, where a comparison
-		// against a missing field yields null in ES|QL and the row is dropped. Only the
-		// static form defines that, since the instance form throws on a null receiver,
-		// so the missing field is spelled out when it can carry one.
-		var staticForm = call.Object is null;
-		var nullableField = staticForm ? FieldThatMayBeMissing(first, second) : null;
+		// .NET orders null before every string: string.Compare(null, "m") is negative and
+		// "m".CompareTo(null) is positive. A comparison against a missing field is null in
+		// ES|QL and drops the row, so a field that can be missing has its side of the
+		// ordering spelled out. The receiver of the instance form is left alone: a null
+		// receiver throws in .NET, so there is no ordering to reproduce.
+		var firstMayBeMissing = instanceForm ? null : AsNullableField(first);
+		var secondMayBeMissing = AsNullableField(second);
 
-		if (nullableField is not null)
-			_ = _builder.Append('(').Append(nullableField).Append(op[0] == '<' ? " IS NULL OR " : " IS NOT NULL AND ");
+		if (firstMayBeMissing is not null && secondMayBeMissing is not null)
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} between two fields that can both be missing "
+				+ "is not supported: the ordering of two absent values has no single ES|QL form.");
+		}
+
+		var descending = op[0] == '>';
+		var guard = firstMayBeMissing is not null
+			// a missing left operand sorts first: below anything, never above
+			? (firstMayBeMissing, descending ? " IS NOT NULL AND " : " IS NULL OR ")
+			: secondMayBeMissing is not null
+				// a missing right operand sorts first: anything is above it, nothing below
+				? (secondMayBeMissing, descending ? " IS NULL OR " : " IS NOT NULL AND ")
+				: default;
+
+		if (guard.Item1 is not null)
+			_ = _builder.Append('(').Append(guard.Item1).Append(guard.Item2);
 
 		_ = Visit(first);
 		_ = _builder.Append(' ').Append(op).Append(' ');
 		_ = Visit(second);
 
-		if (nullableField is not null)
+		if (guard.Item1 is not null)
 			_ = _builder.Append(')');
 
 		return true;
-	}
-
-	/// <summary>
-	/// The field of a comparison that can be missing, when exactly one side reads a
-	/// nullable field of the document and the other is a value to compare it against.
-	/// </summary>
-	private string? FieldThatMayBeMissing(Expression first, Expression second)
-	{
-		var left = AsNullableField(first);
-		var right = AsNullableField(second);
-
-		// with a field on both sides there is no single row-level guard to write
-		return left is not null && right is null ? left
-			: right is not null && left is null ? right
-			: null;
 	}
 
 	private string? AsNullableField(Expression expression) =>
@@ -707,8 +713,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			: null;
 
 	/// <summary>
-	/// Whether the member is declared as nullable. Only then is the guard worth writing:
-	/// on a non-nullable member the comparison already reads the way the source does.
+	/// Whether the member is declared as a nullable reference. Only then is the guard
+	/// worth writing: on a non-nullable member the comparison already reads the way the
+	/// source does.
+	/// <para>
+	/// The compiler records nullability as a <c>NullableAttribute</c> on the member, or
+	/// omits it and records a <c>NullableContextAttribute</c> on the declaring type when
+	/// every member shares the same annotation. Both are read from the attribute data
+	/// rather than by instantiating the attribute, which keeps the check out of the
+	/// trimmer's way.
+	/// </para>
 	/// </summary>
 	private static bool IsDeclaredNullable(MemberInfo member)
 	{
@@ -722,16 +736,40 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (type is null || type.IsValueType)
 			return false;
 
-		// the compiler records a nullable reference type as an attribute on the member
-		var nullable = member.GetCustomAttributes()
-			.FirstOrDefault(attribute => attribute.GetType().FullName == "System.Runtime.CompilerServices.NullableAttribute");
+		var own = NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
 
-		if (nullable is null)
-			return false;
+		if (own is not null)
+			return own == 2;
 
-		var flags = nullable.GetType().GetField("NullableFlags")?.GetValue(nullable);
+		for (var declaring = member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
+		{
+			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
 
-		return flags is byte[] { Length: > 0 } bytes && bytes[0] == 2;
+			if (context is not null)
+				return context == 2;
+		}
+
+		return false;
+	}
+
+	/// <summary>
+	/// The first nullability flag carried by the named attribute: 2 for annotated
+	/// (nullable), 1 for not annotated, 0 for oblivious. The constructor takes either one
+	/// byte or an array whose first element describes the outermost type.
+	/// </summary>
+	private static byte? NullableFlag(IEnumerable<CustomAttributeData> attributes, string attributeName)
+	{
+		var data = attributes.FirstOrDefault(attribute => attribute.AttributeType.FullName == attributeName);
+
+		if (data is null || data.ConstructorArguments.Count == 0)
+			return null;
+
+		return data.ConstructorArguments[0].Value switch
+		{
+			byte flag => flag,
+			IReadOnlyCollection<CustomAttributeTypedArgument> { Count: > 0 } flags => flags.First().Value as byte?,
+			_ => null
+		};
 	}
 
 	private Expression VisitStringMethod(MethodCallExpression node)
@@ -767,12 +805,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			case "CompareTo":
 			case "Compare":
 			case "CompareOrdinal":
-				// string.CompareTo(x) and string.Compare(a, b) only appear inside a
-				// comparison against zero, which the binary visitor rewrites into a
-				// direct comparison between the two operands.
+				// string.CompareTo(x) and string.Compare(a, b) only carry an ordering
+				// inside a comparison against zero, which the binary visitor rewrites into
+				// a direct comparison between the two operands.
 				throw new NotSupportedException(
-					$"String method {methodName} is only supported when compared to zero, "
-					+ "for example a.CompareTo(b) > 0.");
+					$"String method {methodName} is only supported in an ordering comparison "
+					+ "against zero, for example a.CompareTo(b) > 0.");
 
 			case "IsNullOrEmpty":
 				_ = _builder.Append('(');
@@ -1068,34 +1106,32 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
 
 	/// <summary>
-	/// Whether a collection decides membership by default equality. A set or dictionary
-	/// built with its own comparer answers Contains differently from the comparison this
-	/// translation emits, so it is left untranslated rather than answered approximately.
+	/// Whether a collection decides membership by default equality. A set or a
+	/// dictionary's keys answer Contains through the comparer they were built with,
+	/// which the emitted comparison does not reproduce, and reading that comparer back
+	/// takes reflection the trimmer cannot see through. Those families are therefore
+	/// left untranslated; arrays, lists and the like have no equality of their own.
 	/// </summary>
 	private static bool UsesDefaultEquality(IEnumerable collection)
 	{
-		var comparer = collection.GetType()
-			.GetProperty("Comparer", BindingFlags.Instance | BindingFlags.Public)
-			?.GetValue(collection);
+		for (var type = collection.GetType(); type is not null; type = type.BaseType)
+		{
+			if (!type.IsGenericType)
+				continue;
 
-		if (comparer is null)
-			return true;
+			var definition = type.GetGenericTypeDefinition();
 
-		// SortedSet exposes an IComparer, not an IEqualityComparer: there is no default
-		// to compare it against, so the collection is simply not one this translation
-		// can read membership from
-		var equality = comparer.GetType().GetInterfaces()
-			.FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEqualityComparer<>));
+			if (definition == typeof(HashSet<>)
+				|| definition == typeof(SortedSet<>)
+				|| definition == typeof(Dictionary<,>.KeyCollection)
+				|| definition == typeof(SortedDictionary<,>.KeyCollection)
+				|| definition.FullName is "System.Collections.Immutable.ImmutableHashSet`1"
+					or "System.Collections.Immutable.ImmutableSortedSet`1"
+					or "System.Collections.Concurrent.ConcurrentDictionary`2")
+				return false;
+		}
 
-		if (equality is null)
-			return false;
-
-		var defaultComparer = typeof(EqualityComparer<>)
-			.MakeGenericType(equality.GetGenericArguments()[0])
-			.GetProperty("Default")!
-			.GetValue(null);
-
-		return Equals(comparer, defaultComparer);
+		return true;
 	}
 
 	/// <summary>The captured variable an expression reads, when it reads one.</summary>
@@ -1131,7 +1167,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		var name = ResolveMultiValueField(field);
 
-		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
+		// "Any(not P)" is "not All(P)" and "All(not P)" is "not Any(P)": the negation
+		// moves onto the quantifier, which flips
 		if (predicate.Negated)
 		{
 			_ = _builder.Append("NOT ");
@@ -1275,16 +1312,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return true;
 		}
 
-		// A field holding more values than the positions read cannot be answered from
-		// those positions alone, and saying "false" would let an enclosing NOT turn it
-		// into a match. The predicate is null there instead, which WHERE drops either
-		// way, so such a document is left out of the result rather than answered wrongly.
-		// rendered once, before the positions: a captured value becomes one parameter
-		// rather than one per position
-		// This path compares the text of a value, TO_STRING for anything but a string
-		// field, so the values are rendered as text too rather than in their own type.
-		// A captured value still becomes a parameter, but only where the comparison is
-		// against the value itself.
+		// Rendered once, before the positions, so a captured value becomes one parameter
+		// rather than one per position. Anything but a string field is compared through
+		// TO_STRING, so its values are rendered as text rather than in their own type.
 		var rendered = values
 			.Select((value, index) => predicate.Kind == ElementPredicateKind.Contains
 				? RenderPattern(predicate, index, "*" + EscapeLikeMetacharacters(value) + "*")
@@ -1293,6 +1323,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					: EsqlFormatting.FormatString(value))
 			.ToList();
 
+		// A field holding more values than the positions read cannot be answered from
+		// those positions alone, and "false" would let an enclosing NOT turn it into a
+		// match. The predicate is null there instead, which WHERE drops either way, so
+		// such a document is left out of the result rather than answered wrongly.
 		_ = _builder.Append("CASE(MV_COUNT(").Append(field).Append(") > ").Append(MaxInspectedValues).Append(", NULL, (");
 
 		for (var position = 0; position < MaxInspectedValues; position++)
@@ -1328,8 +1362,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static string EscapeLikeMetacharacters(string value) =>
 		value.Replace("\\", "\\\\").Replace("*", "\\*").Replace("?", "\\?");
 
-	/// <summary>One value of a multi-value field, tested against the predicate.</summary>
-	/// <summary>One value of a multi-value field, tested against already rendered values.</summary>
+	/// <summary>One value of a multi-value field, tested against the rendered values.</summary>
 	private void AppendValuePredicate(string value, bool isString, ElementPredicateKind kind, IReadOnlyList<string> rendered)
 	{
 		var text = isString ? value : $"TO_STRING({value})";
@@ -1367,7 +1400,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				break;
 		}
 	}
-
 
 	private bool TryAppendMatch(Expression field, Expression value)
 	{
