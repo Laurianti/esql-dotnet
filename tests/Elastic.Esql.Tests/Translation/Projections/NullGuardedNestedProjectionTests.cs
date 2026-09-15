@@ -49,16 +49,18 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAnUnrelatedBranch_KeepsItsOwnCondition()
+	public void AGuardOverAnUnrelatedBranch_IsRefused()
 	{
 		// the guard tests Host, the branch reads Message: the two are unrelated, so the
-		// guard cannot be dropped or the emitted condition would test the wrong field
-		var esql = CreateQuery<NestedSelectionDocument>()
+		// guard cannot be folded away, and the general conditional fallback renders the
+		// test with the C# operator rather than an ES|QL IS NULL
+		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new { Value = l.Host == null ? null : l.Message })
-			.ToString();
+			.Select(l => new { Value = l.Host == null ? null : l.Message });
 
-		_ = esql.Should().Contain("host");
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]

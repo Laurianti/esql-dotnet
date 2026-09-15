@@ -567,6 +567,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (first is null || second is null)
 			return false;
 
+		// .NET orders a non-null string above null, which a plain ES|QL comparison
+		// against null does not reproduce
+		if (ResolvesToNullConstant(first) || ResolvesToNullConstant(second))
+			return false;
+
 		var op = node.NodeType switch
 		{
 			ExpressionType.GreaterThan => flipped ? "<" : ">",
@@ -1148,13 +1153,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (node.Method.IsStatic)
 		{
-			if (node.Method.DeclaringType == typeof(Enumerable) && node.Arguments.Count >= 2)
+			if (node.Method.DeclaringType == typeof(Enumerable) && node.Arguments.Count == 2)
 			{
 				valueExpression = node.Arguments[1];
 				return TryGetCollectionValue(node.Arguments[0], out collection);
 			}
 
-			if (node.Method.DeclaringType == typeof(MemoryExtensions) && node.Arguments.Count >= 2)
+			if (node.Method.DeclaringType == typeof(MemoryExtensions) && node.Arguments.Count == 2)
 			{
 				var source = TryUnwrapMemoryExtensionsSource(node.Arguments[0]);
 				if (source is null)
@@ -1301,6 +1306,25 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			PropertyInfo property => property.GetValue(null),
 			_ => throw new NotSupportedException($"Static member type {member.Member.GetType()} is not supported.")
 		};
+
+	/// <summary>A null literal, or a captured variable that holds null.</summary>
+	private static bool ResolvesToNullConstant(Expression expression)
+	{
+		if (IsNullConstant(expression))
+			return true;
+
+		if (expression is not (MemberExpression or UnaryExpression { NodeType: ExpressionType.Convert }))
+			return false;
+
+		try
+		{
+			return GetConstantValue(expression) is null;
+		}
+		catch (NotSupportedException)
+		{
+			return false;
+		}
+	}
 
 	private static bool IsNullConstant(Expression expression) =>
 		expression is ConstantExpression { Value: null };

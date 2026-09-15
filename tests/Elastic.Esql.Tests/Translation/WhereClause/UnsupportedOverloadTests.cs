@@ -85,4 +85,46 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void CompareToNull_IsRefused()
+	{
+		// .NET orders a non-null string above null; an ES|QL comparison against null
+		// does not reproduce that
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.CompareTo((string?)null) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void CompareToACapturedNull_IsRefused()
+	{
+		var missing = (string?)null;
+
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.CompareTo(missing) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AConstantCollectionContainsWithAComparer_IsRefused()
+	{
+		var wanted = new[] { "a", "b" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t, StringComparer.OrdinalIgnoreCase)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }
