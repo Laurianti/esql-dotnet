@@ -294,4 +294,14 @@ internal static class EsqlFunctionTranslator
 
 		return $"{functionName}({string.Join(", ", translated)})";
 	}
+
+	/// <summary>
+	/// Whether the ES|QL function the call translates to is null when an input is null,
+	/// which every scalar function is except the few that exist to answer null: COALESCE,
+	/// IS NULL and IS NOT NULL. A projection relies on this to drop a null guard around a
+	/// function of the guarded path.
+	/// </summary>
+	internal static bool PropagatesNull(MethodCallExpression call) =>
+		call.Method.DeclaringType != typeof(EsqlFunctions)
+		|| call.Method.Name is not (nameof(EsqlFunctions.Coalesce) or nameof(EsqlFunctions.IsNull) or nameof(EsqlFunctions.IsNotNull));
 }
