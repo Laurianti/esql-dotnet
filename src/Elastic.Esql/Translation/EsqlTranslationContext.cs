@@ -32,6 +32,13 @@ internal sealed class EsqlTranslationContext
 	public bool HasProjected { get; set; }
 
 	/// <summary>
+	/// How many values of a multi-value field a predicate may read, one position at a
+	/// time, as stated with <c>MultiValueLimit</c>. Null until stated, and then the
+	/// predicates that need it are not translated.
+	/// </summary>
+	public int? MultiValueLimit { get; set; }
+
+	/// <summary>
 	/// Named-parameter accumulator. Settable internally so sub-pipeline visitors (e.g. FORK
 	/// branches) can share the parent's instance and avoid losing parameters at branch boundaries.
 	/// </summary>

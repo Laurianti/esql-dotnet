@@ -673,22 +673,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		var descending = op[0] == '>';
-		var guard = firstMayBeMissing is not null
+		var guardedField = firstMayBeMissing ?? secondMayBeMissing;
+		var guardClause = firstMayBeMissing is not null
 			// a missing left operand sorts first: below anything, never above
-			? (firstMayBeMissing, descending ? " IS NOT NULL AND " : " IS NULL OR ")
-			: secondMayBeMissing is not null
-				// a missing right operand sorts first: anything is above it, nothing below
-				? (secondMayBeMissing, descending ? " IS NULL OR " : " IS NOT NULL AND ")
-				: default;
+			? descending ? " IS NOT NULL AND " : " IS NULL OR "
+			// a missing right operand sorts first: anything is above it, nothing below
+			: descending ? " IS NULL OR " : " IS NOT NULL AND ";
 
-		if (guard.Item1 is not null)
-			_ = _builder.Append('(').Append(guard.Item1).Append(guard.Item2);
+		if (guardedField is not null)
+			_ = _builder.Append('(').Append(guardedField).Append(guardClause);
 
 		_ = Visit(first);
 		_ = _builder.Append(' ').Append(op).Append(' ');
 		_ = Visit(second);
 
-		if (guard.Item1 is not null)
+		if (guardedField is not null)
 			_ = _builder.Append(')');
 
 		return true;
@@ -879,14 +878,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return node;
 	}
 
-	/// <summary>
-	/// How many values of a multi-value field a predicate inspects, one position at a
-	/// time. MV_SLICE reads a value by position, so the number of positions has to be
-	/// fixed when the query is written; a field holding more values than this cannot be
-	/// decided from the positions read, and the predicate is null for it.
-	/// </summary>
-	private const int MaxInspectedValues = 32;
-
 	private enum ElementPredicateKind
 	{
 		Equal,
@@ -901,6 +892,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>A predicate over one value of a multi-value field, e.g. "x == 42".</summary>
+	/// <param name="Kind">The comparison the predicate makes.</param>
+	/// <param name="Values">The values it compares against, one for a comparison, any number for In.</param>
+	/// <param name="Negated">Whether the predicate was written under a NOT, which moves between Any and All.</param>
 	/// <param name="Names">
 	/// The captured variable each value came from, where it came from one, so the
 	/// value can be emitted as a query parameter rather than inlined.
@@ -1275,10 +1269,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// reads a value by position, so the test is written out once per position and
 	/// combined: any of them for Any, all of them for All.
 	/// <para>
-	/// Only the first <see cref="MaxInspectedValues"/> positions are read, so a field
-	/// holding more values than that cannot be decided from them. The predicate is null
-	/// for such a field rather than false, since false would let an enclosing NOT turn it
-	/// into a match, and WHERE drops a null row either way.
+	/// Only as many positions as the caller stated with <c>MultiValueLimit</c> are read,
+	/// so a field holding more values than that cannot be decided from them. The predicate
+	/// is null for such a field rather than false, since false would let an enclosing NOT
+	/// turn it into a match, and WHERE drops a null row either way.
 	/// </para>
 	/// </summary>
 	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)
@@ -1307,6 +1301,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return true;
 		}
 
+		// The number of positions read has to be fixed when the query is written, and a
+		// document holding more values is left out of the result: that is a contract the
+		// caller states with MultiValueLimit, not one the translation may assume.
+		var positions = _context.MultiValueLimit
+			?? throw new NotSupportedException(
+				"A predicate over the individual values of a multi-value field, such as "
+				+ "StartsWith or All over a list, reads the field one position at a time and "
+				+ "needs to know how many to read: state it with MultiValueLimit(n). A document "
+				+ "holding more values than that is then left out of the result.");
+
 		// Rendered once, before the positions, so a captured value becomes one parameter
 		// rather than one per position. Anything but a string field is compared through
 		// TO_STRING, so its values are rendered as text rather than in their own type.
@@ -1322,9 +1326,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// those positions alone, and "false" would let an enclosing NOT turn it into a
 		// match. The predicate is null there instead, which WHERE drops either way, so
 		// such a document is left out of the result rather than answered wrongly.
-		_ = _builder.Append("CASE(MV_COUNT(").Append(field).Append(") > ").Append(MaxInspectedValues).Append(", NULL, (");
+		_ = _builder.Append("CASE(MV_COUNT(").Append(field).Append(") > ").Append(positions).Append(", NULL, (");
 
-		for (var position = 0; position < MaxInspectedValues; position++)
+		for (var position = 0; position < positions; position++)
 		{
 			if (position > 0)
 				_ = _builder.Append(all ? " AND " : " OR ");

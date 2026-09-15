@@ -65,14 +65,19 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 
 	protected override Expression VisitMethodCall(MethodCallExpression node)
 	{
-		// Visit the source first (builds the query from inside out).
-		if (node.Arguments.Count > 0)
-			_ = Visit(node.Arguments[0]);
-
 		var methodName = node.Method.Name;
 		var declaringType = node.Method.DeclaringType;
 		var isQueryableMethod = declaringType == typeof(Queryable);
 		var isEsqlExtensionMethod = declaringType == typeof(EsqlQueryableExtensions);
+
+		// A statement about the data rather than a step of the query: read before the
+		// source, so that it holds wherever in the chain it was written.
+		if (isEsqlExtensionMethod && methodName == nameof(EsqlQueryableExtensions.MultiValueLimit))
+			VisitMultiValueLimit(node);
+
+		// Visit the source first (builds the query from inside out).
+		if (node.Arguments.Count > 0)
+			_ = Visit(node.Arguments[0]);
 
 		switch (methodName)
 		{
@@ -82,6 +87,10 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 
 			case nameof(Queryable.Where) when isQueryableMethod:
 				VisitWhere(node);
+				break;
+
+			case nameof(EsqlQueryableExtensions.MultiValueLimit) when isEsqlExtensionMethod:
+				// already read, before the source
 				break;
 
 			case nameof(Queryable.Select) when isQueryableMethod:
@@ -610,6 +619,14 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			Context.Commands.Add(new RawFragmentCommand(fragment));
 
 		Context.ElementType = ResolveQueryableElementType(node.Method.ReturnType) ?? Context.ElementType;
+	}
+
+	private void VisitMultiValueLimit(MethodCallExpression node)
+	{
+		if (node.Arguments.Count < 2)
+			return;
+
+		Context.MultiValueLimit = (int)ExpressionConstantResolver.Resolve(node.Arguments[1])!;
 	}
 
 	private void VisitWithOptions(MethodCallExpression node)

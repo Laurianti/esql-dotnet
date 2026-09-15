@@ -46,6 +46,7 @@ internal static class ForkBranchVisitor
 		// a branch starts from whatever the parent had built: if the rows were already
 		// projected there, they are projected in the branch too
 		visitor.Context.HasProjected = parentContext.HasProjected;
+		visitor.Context.MultiValueLimit = parentContext.MultiValueLimit;
 
 		var query = visitor.Translate(rewrittenBody);
 

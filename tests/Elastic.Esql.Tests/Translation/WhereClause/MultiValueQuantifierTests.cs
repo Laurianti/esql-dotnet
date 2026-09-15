@@ -6,11 +6,13 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
 /// Any and All over a multi-value field with a predicate MATCH cannot answer, such as
-/// "starts with" or "greater than", and the way negation moves between the two.
+/// "starts with" or "greater than", and the way negation moves between the two. A
+/// predicate over the individual values reads the field one position at a time, and
+/// needs the caller to state how many with MultiValueLimit.
 /// </summary>
 public class MultiValueQuantifierTests : EsqlTestBase
 {
-	// how many positions the translation reads, one MV_SLICE each
+	// how many positions these queries state with MultiValueLimit, one MV_SLICE each
 	private const int Positions = 32;
 
 	/// <summary>
@@ -39,6 +41,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
 			.ToString();
 
@@ -54,6 +57,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.EndsWith("al")))
 			.ToString();
 
@@ -69,6 +73,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.Contains("at")))
 			.ToString();
 
@@ -84,6 +89,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.All(t => t.StartsWith("i")))
 			.ToString();
 
@@ -99,6 +105,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => !t.StartsWith("i")))
 			.ToString();
 
@@ -114,6 +121,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.All(t => !t.Contains("at")))
 			.ToString();
 
@@ -130,6 +138,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// "some value differs from x" is "not every value is x"
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t != "iot"))
 			.ToString();
 
@@ -146,6 +155,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// generated predicates guard the element against null; a stored value never is
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t != null && t.StartsWith("wat")))
 			.ToString();
 
@@ -161,6 +171,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => !(t != null && t.StartsWith("wat"))))
 			.ToString();
 
@@ -178,6 +189,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
 			.ToString();
 
@@ -195,6 +207,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.All(t => wanted.Contains(t)))
 			.ToString();
 
@@ -212,6 +225,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.All(r => wanted.Contains(r)))
 			.ToString();
 
@@ -228,6 +242,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// a quote would otherwise end the ES|QL string literal
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith("a\"b")))
 			.ToString();
 
@@ -245,6 +260,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// for a delimiter
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith("ab")))
 			.ToString();
 
@@ -256,6 +272,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.Any(r => r > 3))
 			.ToString();
 
@@ -271,6 +288,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.All(r => r >= 3))
 			.ToString();
 
@@ -286,6 +304,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.All(r => r > 3))
 			.ToString();
 
@@ -301,6 +320,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.Any(r => r < 3))
 			.ToString();
 
@@ -316,6 +336,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.Any(r => 3 < r))
 			.ToString();
 
@@ -333,6 +354,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// that the field is present, or an enclosing NOT would answer neither way
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Ratings.All(r => !(r > 3)))
 			.ToString();
 
@@ -349,6 +371,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// LINQ reads a missing field as an empty sequence: !Any() holds there
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => !p.Tags.Any())
 			.ToString();
 
@@ -366,6 +389,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// the NOT is definite without any enclosing guard
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => !(p.Tags.Any(t => t.StartsWith("a")) && p.Categories.Any(c => c.StartsWith("b"))))
 			.ToString();
 
@@ -382,6 +406,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// nothing approximate: an unknown predicate keeps the existing behaviour
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.Length > 3));
 
 		var act = () => query.ToString();
@@ -397,6 +422,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// into a match, so the answer is null, which WHERE drops either way.
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
 			.ToString();
 
@@ -409,6 +435,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// the bound is inside the CASE, so the negation cannot turn it into a match
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => !p.Tags.Any(t => t.StartsWith("wat")))
 			.ToString();
 
@@ -422,6 +449,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// to avoid, and scalar predicates already go through it
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith("a\nb")))
 			.ToString();
 
@@ -435,6 +463,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// escaping the quote in both places would emit one backslash too many
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.Contains("a\"b")))
 			.ToString();
 
@@ -450,6 +479,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t == tag))
 			.ToEsqlString(inlineParameters: false);
 
@@ -463,6 +493,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.StartsWith(prefix)))
 			.ToEsqlString(inlineParameters: false);
 
@@ -478,6 +509,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		// has no name to give it
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Contains("water"))
 			.ToEsqlString(inlineParameters: false);
 
@@ -491,10 +523,95 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
+			.MultiValueLimit(Positions)
 			.Where(p => p.Tags.Any(t => t.Contains(fragment)))
 			.ToEsqlString(inlineParameters: false);
 
 		_ = esql.Should().Contain("LIKE ?fragment");
 		_ = esql.Should().NotContain("*ate*");
+	}
+
+	[Test]
+	public void WithoutAStatedLimit_APredicateOverTheValues_IsRefused()
+	{
+		// how many positions to read is a contract about the data, which the caller
+		// states; without it the shape is not translated rather than translated with a
+		// number chosen here
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*MultiValueLimit*");
+	}
+
+	[Test]
+	public void WithoutAStatedLimit_EqualityStillGoesThroughMatch()
+	{
+		// MATCH and MV_MIN / MV_MAX read the whole field: no positions, no limit needed
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot") && p.Ratings.Any(r => r > 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (MATCH(tags, "iot") AND (ratings IS NOT NULL AND MV_MAX(ratings) > 3))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void TheStatedLimit_SetsThePositionsRead()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(2)
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE CASE(MV_COUNT(tags) > 2, NULL, (COALESCE(STARTS_WITH(MV_SLICE(tags, 0, 0), "wat"), false) OR COALESCE(STARTS_WITH(MV_SLICE(tags, 1, 1), "wat"), false)))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void ALimitStatedAfterThePredicate_StillApplies()
+	{
+		// a statement about the data, not a step of the query: its place in the chain
+		// does not matter
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
+			.MultiValueLimit(2)
+			.ToString();
+
+		_ = esql.Should().Contain("CASE(MV_COUNT(tags) > 2, NULL,");
+		_ = esql.Should().NotContain("MV_SLICE(tags, 2, 2)");
+	}
+
+	[Test]
+	public void TheStatedLimit_CarriesIntoAForkBranch()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(2)
+			.Fork(b => b.Where(p => p.Tags.Any(t => t.StartsWith("wat"))), b => b.Take(1))
+			.ToString();
+
+		_ = esql.Should().Contain("CASE(MV_COUNT(tags) > 2, NULL,");
+	}
+
+	[Test]
+	public void ALimitBelowOne_IsRefusedWhenStated()
+	{
+		var query = CreateQuery<TaggedProduct>().From("products");
+
+		var act = () => query.MultiValueLimit(0);
+
+		_ = act.Should().Throw<ArgumentOutOfRangeException>();
 	}
 }

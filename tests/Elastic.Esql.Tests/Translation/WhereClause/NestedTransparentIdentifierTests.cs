@@ -43,7 +43,7 @@ public class NestedTransparentIdentifierTests : EsqlTestBase
 		var whereCall = (MethodCallExpression)query.Expression;
 		var predicate = (LambdaExpression)((UnaryExpression)whereCall.Arguments[1]).Operand;
 
-		var context = new EsqlTranslationContext { Metadata = QueryProvider.Metadata, InlineParameters = true };
+		var context = new EsqlTranslationContext { Metadata = QueryProvider.Metadata, InlineParameters = true, MultiValueLimit = 4 };
 		var translated = new WhereClauseVisitor(context).Translate(predicate.Body);
 
 		_ = translated.Should().NotContain("outer");
