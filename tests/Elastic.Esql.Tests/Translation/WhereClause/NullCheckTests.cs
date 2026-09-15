@@ -98,4 +98,19 @@ public class NullCheckTests : EsqlTestBase
 
 		_ = esql.Should().Contain("WHERE TRUE");
 	}
+
+	[Test]
+	public void AProjectedRow_IsStillProjectedInsideAForkBranch()
+	{
+		// the branch starts a fresh context: the parent's projection has to carry over, or
+		// the guard on the projected row folds to FALSE and empties the branch
+		var query = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Select(n => n.Child)
+			.Fork(b => b.Where(n => n == null), b => b.Take(1));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }

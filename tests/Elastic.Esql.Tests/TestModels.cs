@@ -14,6 +14,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(OptionalDocument))]
+[JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(SimpleDocument))]
 [JsonSerializable(typeof(MetricDocument))]
 [JsonSerializable(typeof(EventDocument))]
@@ -49,6 +50,17 @@ public class BookProjection
 	public string Id { get; set; } = string.Empty;
 	public string Title { get; set; } = string.Empty;
 	public float Score { get; set; }
+}
+
+/// <summary>
+/// Self-referencing document: a projection onto <see cref="Child"/> keeps the element
+/// type, so the type alone cannot tell a projected row from a document.
+/// </summary>
+public class TreeNode
+{
+	public string Name { get; set; } = string.Empty;
+
+	public TreeNode? Child { get; set; }
 }
 
 /// <summary>

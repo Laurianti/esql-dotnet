@@ -927,6 +927,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <c>field.All(...)</c> and <c>field.Contains(value)</c>. A document holds every
 	/// value of the field at once, so the quantifier is answered on the field itself,
 	/// without the row duplication MV_EXPAND would introduce.
+	/// <para>
+	/// Equality here is the store's: the field is compared the way Elasticsearch compares
+	/// its values. The property's collection type is how a document is materialized, and
+	/// a comparer set on an instance is not visible when the query is translated, just as
+	/// a scalar comparison on a string property does not see one either.
+	/// </para>
 	/// </summary>
 	private bool TryVisitMultiValueField(MethodCallExpression node)
 	{
