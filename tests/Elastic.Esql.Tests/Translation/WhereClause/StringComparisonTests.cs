@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -83,6 +83,38 @@ public class StringComparisonTests : EsqlTestBase
 			"""
             FROM logs-*
             | WHERE (duration > 1.5 OR (duration == 1.5 AND message > "m"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void CompareOrdinal_IsTranslated()
+	{
+		// the ordering ES|QL applies to a keyword field is ordinal, so this is the form
+		// that means exactly what the translation performs
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, "m") > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message > "m"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void CompareWithOrdinalComparison_IsTranslated()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, "m", StringComparison.Ordinal) > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message > "m"
             """.NativeLineEndings());
 	}
 }

@@ -515,6 +515,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// "p != null" on the lambda parameter itself: the document is never null, and
 	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
 	/// </summary>
+	/// <summary>Whether the StringComparison argument asks for an ordinal ordering.</summary>
+	private static bool IsOrdinalComparison(Expression expression)
+	{
+		try
+		{
+			return GetConstantValue(expression) is StringComparison.Ordinal or StringComparison.OrdinalIgnoreCase;
+		}
+		catch (NotSupportedException)
+		{
+			return false;
+		}
+	}
+
 	private bool TryVisitRootNullGuard(BinaryExpression node)
 	{
 		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
@@ -573,24 +586,39 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (call is null || zero is not ConstantExpression { Value: 0 })
 			return false;
 
-		if (call.Method.DeclaringType != typeof(string) || call.Method.Name is not ("CompareTo" or "Compare"))
+		if (call.Method.DeclaringType != typeof(string)
+			|| call.Method.Name is not ("CompareTo" or "Compare" or "CompareOrdinal"))
 			return false;
 
-		// Only the plain string overloads carry the ordering ES|QL performs. Anything
-		// else, such as a StringComparison or a culture, asks for a comparison the
-		// translation cannot honour, so it is left unsupported rather than ignored.
 		var parameters = call.Method.GetParameters();
 
-		if (parameters.Any(parameter => parameter.ParameterType != typeof(string)))
+		// the values compared have to be strings: CompareTo(object) orders something else
+		if (parameters.Take(call.Object is not null ? 1 : 2).Any(parameter => parameter.ParameterType != typeof(string)))
 			return false;
 
-		// instance form: a.CompareTo(b); static form: string.Compare(a, b)
-		var (first, second) = call.Object is not null
-			? parameters.Length == 1 ? (call.Object, call.Arguments[0]) : (null, null)
-			: parameters.Length == 2 ? (call.Arguments[0], call.Arguments[1]) : (null, null);
+		// instance form: a.CompareTo(b); static form: string.Compare(a, b), with an
+		// optional StringComparison that has to be an ordinal one
+		var (first, second, comparison) = call.Object is not null
+			? parameters.Length == 1 ? (call.Object, call.Arguments[0], (Expression?)null) : (null, null, null)
+			: parameters.Length is 2 or 3 ? (call.Arguments[0], call.Arguments[1], parameters.Length == 3 ? call.Arguments[2] : null)
+			: (null, null, null);
 
 		if (first is null || second is null)
 			return false;
+
+		if (parameters.Length == 3 && parameters[2].ParameterType != typeof(StringComparison))
+			return false;
+
+		// ES|QL orders keyword values by their bytes. An explicitly ordinal comparison
+		// means exactly that; a culture-sensitive one means something else, and is
+		// refused rather than answered with an ordering it did not ask for.
+		if (comparison is not null && !IsOrdinalComparison(comparison))
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} is only supported with StringComparison.Ordinal "
+				+ "or OrdinalIgnoreCase: a culture-sensitive comparison asks for an ordering "
+				+ "Elasticsearch does not apply to keyword fields.");
+		}
 
 		// .NET orders a non-null string above null, which a plain ES|QL comparison
 		// against null does not reproduce
@@ -644,6 +672,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 			case "CompareTo":
 			case "Compare":
+			case "CompareOrdinal":
 				// string.CompareTo(x) and string.Compare(a, b) only appear inside a
 				// comparison against zero, which the binary visitor rewrites into a
 				// direct comparison between the two operands.

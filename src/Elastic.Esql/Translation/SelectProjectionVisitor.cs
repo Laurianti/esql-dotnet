@@ -631,15 +631,16 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			}
 		}
 
-		// A guard whose branch does not read through the guarded path cannot be folded
-		// away, and the general fallback below renders the test with the C# operator
-		// rather than an ES|QL IS NULL, so the shape is left unsupported instead.
+		// The fallback below renders the test with the C# operator, and "x == null" is
+		// not how ES|QL asks that question, so a conditional testing null is refused
+		// unless it was folded away above as a guard over the path it reads.
 		if (conditional.Test is BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison
 			&& (IsNullConstant(comparison.Left) || IsNullConstant(comparison.Right)))
 		{
 			throw new NotSupportedException(
-				"A null-guarded projection is only supported when the guarded branch reads through "
-				+ "the guarded path, as in \"p.Child == null ? null : new Dto { Field = p.Child.Field }\".");
+				"A conditional testing null in a projection is only supported when it guards a "
+				+ "branch that reads through the tested path, as in "
+				+ "\"p.Child == null ? null : new Dto { Field = p.Child.Field }\".");
 		}
 
 		var test = TranslateExpression(conditional.Test);

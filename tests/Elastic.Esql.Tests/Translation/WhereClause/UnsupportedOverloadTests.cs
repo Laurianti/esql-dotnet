@@ -11,12 +11,13 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 public class UnsupportedOverloadTests : EsqlTestBase
 {
 	[Test]
-	public void CompareWithAStringComparison_IsRefused()
+	public void CompareWithACultureSensitiveComparison_IsRefused()
 	{
-		// dropping the comparison mode would silently make the predicate case-sensitive
+		// an ordinal comparison is what ES|QL performs; a culture-sensitive one asks
+		// for a different ordering and is refused rather than answered with this one
 		var query = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => string.Compare(l.Message, "m", StringComparison.OrdinalIgnoreCase) > 0);
+			.Where(l => string.Compare(l.Message, "m", StringComparison.CurrentCulture) > 0);
 
 		var act = () => query.ToString();
 
