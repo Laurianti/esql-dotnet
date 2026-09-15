@@ -12,7 +12,6 @@ using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Formatting;
 using Elastic.Esql.Functions;
-using Elastic.Esql.QueryModel.Commands;
 
 namespace Elastic.Esql.Translation;
 
@@ -577,9 +576,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& (_context.ElementType is null || parameter.Type == _context.ElementType)
 		// Matching the element type is not enough: a recursive type projects to itself,
 		// as in ".Select(n => n.Child)" over "Node.Child : Node?", and the projected
-		// value may well be null. Once anything has been projected the parameter is no
-		// longer known to be the document row.
-		&& !_context.Commands.Any(command => command is KeepCommand or EvalCommand);
+		// value may well be null. Keep and Drop narrow the columns but leave the row,
+		// so the question is whether a Select has run, not which commands were emitted.
+		&& !_context.HasProjected;
 
 	/// <summary>
 	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
@@ -617,9 +616,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		var parameters = call.Method.GetParameters();
 
-		// the values compared have to be strings: CompareTo(object) orders something else
+		// the values compared have to be strings: CompareTo(object) orders something else,
+		// and the shape is already the supported one, so the refusal comes from here
+		// rather than from the generic "only supported when compared to zero" message
 		if (parameters.Take(call.Object is not null ? 1 : 2).Any(parameter => parameter.ParameterType != typeof(string)))
-			return false;
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} is only supported when comparing two strings; "
+				+ "an overload taking another type orders something ES|QL does not.");
+		}
 
 		// instance form: a.CompareTo(b); static form: string.Compare(a, b), with an
 		// optional StringComparison that has to be an ordinal one
@@ -948,6 +953,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					&& valueExpression == element
 					&& collection is not null)
 				{
+					// enumerating the collection loses the equality it was built with: a set
+					// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
+					// which the emitted comparison does not reproduce
+					if (!UsesDefaultEquality(collection))
+						return null;
+
 					var candidates = collection.Cast<object?>().ToList();
 
 					// a stored value is never null, and MATCH(field, null) is not valid ES|QL
@@ -992,6 +1003,30 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		expression is BinaryExpression binary
 		&& binary.NodeType == comparison
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
+
+	/// <summary>
+	/// Whether a collection decides membership by default equality. A set or dictionary
+	/// built with its own comparer answers Contains differently from the comparison this
+	/// translation emits, so it is left untranslated rather than answered approximately.
+	/// </summary>
+	private static bool UsesDefaultEquality(IEnumerable collection)
+	{
+		var comparer = collection.GetType()
+			.GetProperty("Comparer", BindingFlags.Instance | BindingFlags.Public)
+			?.GetValue(collection);
+
+		if (comparer is null)
+			return true;
+
+		var defaultComparer = typeof(EqualityComparer<>)
+			.MakeGenericType(comparer.GetType().GetInterfaces()
+				.First(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEqualityComparer<>))
+				.GetGenericArguments()[0])
+			.GetProperty("Default")!
+			.GetValue(null);
+
+		return Equals(comparer, defaultComparer);
+	}
 
 	/// <summary>The captured variable an expression reads, when it reads one.</summary>
 	private static string? CapturedName(Expression expression) =>

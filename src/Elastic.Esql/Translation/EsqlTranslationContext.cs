@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -24,6 +24,12 @@ internal sealed class EsqlTranslationContext
 
 	public Type? ElementType { get; set; }
 	public List<QueryCommand> Commands { get; } = [];
+
+	/// <summary>
+	/// Whether a Select has replaced the rows with something built from them. Keep and
+	/// Drop narrow the columns but leave the row itself, so they do not set this.
+	/// </summary>
+	public bool HasProjected { get; set; }
 
 	/// <summary>
 	/// Named-parameter accumulator. Settable internally so sub-pipeline visitors (e.g. FORK

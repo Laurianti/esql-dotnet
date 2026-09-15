@@ -349,22 +349,17 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		if (guarded is null)
 			return false;
 
-		Expression branch;
+		// the branch the guard protects: the one that is not the null literal
+		var branch = test.NodeType == ExpressionType.Equal
+			? IsNullConstant(StripNullableConvert(conditional.IfTrue))
+				? StripNullableConvert(conditional.IfFalse)
+				: null
+			: IsNullConstant(StripNullableConvert(conditional.IfFalse))
+				? StripNullableConvert(conditional.IfTrue)
+				: null;
 
-		if (test.NodeType == ExpressionType.Equal)
-		{
-			if (!IsNullConstant(StripNullableConvert(conditional.IfTrue)))
-				return false;
-
-			branch = StripNullableConvert(conditional.IfFalse);
-		}
-		else
-		{
-			if (!IsNullConstant(StripNullableConvert(conditional.IfFalse)))
-				return false;
-
-			branch = StripNullableConvert(conditional.IfTrue);
-		}
+		if (branch is null)
+			return false;
 
 		// the guard only stands for the branch when the branch reads through the very
 		// path that was tested: "p.Supplier == null ? null : p.Name" keeps its own

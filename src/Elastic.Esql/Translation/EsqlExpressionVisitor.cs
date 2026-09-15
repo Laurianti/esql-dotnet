@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -247,6 +247,9 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 	{
 		if (node.Arguments.Count < 2)
 			return;
+
+		// from here the rows are whatever the selector built, not the document
+		Context.HasProjected = true;
 
 		var selector = node.Arguments[1];
 		if (selector is UnaryExpression { Operand: LambdaExpression lambda })

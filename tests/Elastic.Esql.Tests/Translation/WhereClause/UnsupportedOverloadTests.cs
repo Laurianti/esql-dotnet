@@ -187,4 +187,32 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void ASetWithItsOwnComparer_IsRefused()
+	{
+		// the set answers Contains by its comparer, which the emitted comparison does not
+		var wanted = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "IOT" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void ASetWithDefaultEquality_IsStillTranslated()
+	{
+		var wanted = new HashSet<string> { "iot" };
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
+	}
 }

@@ -84,4 +84,18 @@ public class NullCheckTests : EsqlTestBase
             | WHERE TRUE
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void KeepDoesNotCountAsAProjection()
+	{
+		// Keep narrows the columns but the rows are still documents, so the guard on the
+		// document parameter still folds to a constant
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Keep("message")
+			.Where(l => l != null)
+			.ToString();
+
+		_ = esql.Should().Contain("WHERE TRUE");
+	}
 }
