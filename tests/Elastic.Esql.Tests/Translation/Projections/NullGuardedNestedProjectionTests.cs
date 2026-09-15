@@ -60,4 +60,21 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		_ = esql.Should().Contain("host");
 	}
+
+	[Test]
+	public void AGuardOverAPurelyConstantChild_IsNotUnwrapped()
+	{
+		// nothing in the child reads through Host, so dropping the guard would give the
+		// child a value for a document that has no Host at all
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = "constant" }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }

@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -18,7 +18,9 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.From("logs-*")
 			.Where(l => string.Compare(l.Message, "m", StringComparison.OrdinalIgnoreCase) > 0);
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -28,7 +30,9 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.From("logs-*")
 			.Where(l => l.Message.CompareTo((object)"m") > 0);
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -38,7 +42,9 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.From("products")
 			.Where(p => p.Tags.Contains("x", StringComparer.OrdinalIgnoreCase));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -49,7 +55,9 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.From("products")
 			.Where(p => p.Tags.Any(t => t == null));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -59,18 +67,22 @@ public class UnsupportedOverloadTests : EsqlTestBase
 			.From("products")
 			.Where(p => p.Tags.All(t => t != null));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
 	public void ContainsNull_IsRefused()
 	{
-		string? missing = null;
+		var missing = (string?)null;
 
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Contains(missing!));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 }

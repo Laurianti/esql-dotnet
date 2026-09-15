@@ -758,7 +758,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// field.Any() with no predicate: the field simply has to hold a value
 		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
 		{
-			_ = _builder.Append("MV_COUNT(").Append(source.ResolveFieldName(_context.Metadata)).Append(") > 0");
+			// MV_COUNT is null over a missing field, and so would be the negation; LINQ
+			// reads a missing field as an empty sequence, where Any() is simply false
+			_ = _builder.Append("COALESCE(MV_COUNT(").Append(source.ResolveFieldName(_context.Metadata)).Append("), 0) > 0");
 			return true;
 		}
 
@@ -908,14 +910,27 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private bool TryAppendQuantified(Expression field, Type elementType, bool all, ElementPredicate predicate)
 	{
+		var name = field.ResolveFieldName(_context.Metadata);
+
+		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
+		// satisfies the All that was written, so its guard is emitted around the
+		// negation rather than inside it
+		var vacuouslyTrue = all;
+		var guardsMissingField = vacuouslyTrue
+			&& predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual
+				or ElementPredicateKind.LessThan or ElementPredicateKind.LessThanOrEqual;
+
+		if (guardsMissingField && predicate.Negated)
+			_ = _builder.Append('(').Append(name).Append(" IS NULL OR ");
+
+		var negated = predicate.Negated;
+
 		if (predicate.Negated)
 		{
 			_ = _builder.Append("NOT ");
 			all = !all;
 			predicate = predicate with { Negated = false };
 		}
-
-		var name = field.ResolveFieldName(_context.Metadata);
 
 		switch (predicate.Kind)
 		{
@@ -969,14 +984,20 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					_ => "<="
 				};
 
-				// All() over the empty field holds
-				if (all)
+				// All() over a missing field holds; when a negation flipped the
+				// quantifier the guard was already emitted around it
+				var guardHere = vacuouslyTrue && !negated;
+
+				if (guardHere)
 					_ = _builder.Append('(').Append(name).Append(" IS NULL OR ");
 
 				_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
 					.Append(_context.FormatValue(predicate.Values[0], null));
 
-				if (all)
+				if (guardHere)
+					_ = _builder.Append(')');
+
+				if (guardsMissingField && negated)
 					_ = _builder.Append(')');
 
 				return true;

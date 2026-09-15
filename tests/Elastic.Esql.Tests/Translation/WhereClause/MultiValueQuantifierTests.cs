@@ -170,7 +170,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	[Test]
 	public void Any_InAConstantList_TranslatesToMatchesInOr()
 	{
-		string[] wanted = ["iot", "water"];
+		var wanted = new[] { "iot", "water" };
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -187,7 +187,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	[Test]
 	public void All_InAConstantList_RequiresEveryValueToBeListed()
 	{
-		string[] wanted = ["iot", "water"];
+		var wanted = new[] { "iot", "water" };
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -204,7 +204,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	[Test]
 	public void All_InAConstantListOfIntegers_ComparesTheirText()
 	{
-		int[] wanted = [5, 42];
+		var wanted = new[] { 5, 42 };
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -240,7 +240,9 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.From("products")
 			.Where(p => p.Tags.Any(t => t.StartsWith("a" + Sep + "b")));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 
 	[Test]
@@ -326,6 +328,41 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.From("products")
 			.Where(p => p.Tags.Any(t => t.Length > 3));
 
-		_ = Assert.Throws<NotSupportedException>(() => query.ToString());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void ANegatedQuantifierKeepsTheMissingFieldGuardOfTheOriginal()
+	{
+		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
+		// satisfies the All that was written, so the guard follows the original
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.All(r => !(r > 3)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (ratings IS NULL OR NOT MV_MAX(ratings) > 3)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void ANegatedAnyOverAMissingFieldIsTrue()
+	{
+		// LINQ reads a missing field as an empty sequence: !Any() holds there
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !p.Tags.Any())
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT COALESCE(MV_COUNT(tags), 0) > 0
+            """.NativeLineEndings());
 	}
 }

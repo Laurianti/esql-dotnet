@@ -59,6 +59,8 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Any_WithoutPredicate_TranslatesToMvCount()
 	{
+		// the count is coalesced: a missing field is an empty sequence, where Any() is
+		// false, and so is its negation's opposite
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Any())
@@ -67,7 +69,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MV_COUNT(tags) > 0
+            | WHERE COALESCE(MV_COUNT(tags), 0) > 0
             """.NativeLineEndings());
 	}
 
@@ -183,7 +185,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	{
 		// the existing behaviour must not change: here the collection is the constant,
 		// and the document field is the argument
-		string[] names = ["a", "b"];
+		var names = new[] { "a", "b" };
 
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
