@@ -511,12 +511,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return result;
 	}
 
-	/// <summary>Whether the StringComparison argument asks for an ordinal ordering.</summary>
+	/// <summary>
+	/// Whether the StringComparison argument asks for the ordering ES|QL performs.
+	/// Only <see cref="StringComparison.Ordinal"/> does: keyword ordering is
+	/// case-sensitive, so OrdinalIgnoreCase would order "a" and "B" the other way.
+	/// </summary>
 	private static bool IsOrdinalComparison(Expression expression)
 	{
 		try
 		{
-			return GetConstantValue(expression) is StringComparison.Ordinal or StringComparison.OrdinalIgnoreCase;
+			return GetConstantValue(expression) is StringComparison.Ordinal;
 		}
 		catch (NotSupportedException)
 		{
@@ -615,9 +619,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (comparison is not null && !IsOrdinalComparison(comparison))
 		{
 			throw new NotSupportedException(
-				$"String method {call.Method.Name} is only supported with StringComparison.Ordinal "
-				+ "or OrdinalIgnoreCase: a culture-sensitive comparison asks for an ordering "
-				+ "Elasticsearch does not apply to keyword fields.");
+				$"String method {call.Method.Name} is only supported with StringComparison.Ordinal: "
+				+ "keyword ordering is ordinal and case-sensitive, so any other comparison mode "
+				+ "asks for an ordering Elasticsearch does not apply.");
 		}
 
 		// .NET orders a non-null string above null, which a plain ES|QL comparison
@@ -760,8 +764,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	/// <summary>
 	/// How many values of a multi-value field a predicate inspects, one position at a
-	/// time. MV_SLICE reads a value by position, so the count has to be bounded, and a
-	/// document holding more values is excluded rather than answered from a prefix.
+	/// time. MV_SLICE reads a value by position, so the number of positions has to be
+	/// fixed when the query is written; a field holding more values than this is
+	/// answered from the positions that are read.
 	/// </summary>
 	private const int MaxInspectedValues = 32;
 
@@ -1071,9 +1076,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// reads a value by position, so the test is written out once per position and
 	/// combined: any of them for Any, all of them for All.
 	/// <para>
-	/// Only the first <see cref="MaxInspectedValues"/> positions are read. A field with
-	/// more values than that is beyond what this translation covers, and the predicate
-	/// is refused rather than answered from a prefix of the values.
+	/// Only the first <see cref="MaxInspectedValues"/> positions are read, and a field
+	/// holding more values than that is answered from those positions alone. Bounding it
+	/// inside the predicate would not help: a condition on MV_COUNT is flipped by an
+	/// enclosing NOT like everything else, and there is no way to test the remaining
+	/// values, since a scalar function over a multi-value field yields null.
 	/// </para>
 	/// </summary>
 	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)

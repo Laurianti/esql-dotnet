@@ -158,4 +158,18 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void CompareWithOrdinalIgnoreCase_IsRefused()
+	{
+		// keyword ordering is case-sensitive: "a" sorts after "B" there, and before it
+		// under OrdinalIgnoreCase, so the two disagree
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, "m", StringComparison.OrdinalIgnoreCase) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }
