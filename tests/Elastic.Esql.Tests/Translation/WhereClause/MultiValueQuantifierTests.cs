@@ -414,4 +414,30 @@ public class MultiValueQuantifierTests : EsqlTestBase
 
 		_ = esql.Should().Contain($"NOT CASE(MV_COUNT(tags) > {Positions}, NULL,");
 	}
+
+	[Test]
+	public void ControlCharactersInTheValue_AreEscaped()
+	{
+		// a raw newline in the query text is what the repository's own formatter exists
+		// to avoid, and scalar predicates already go through it
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("a\nb")))
+			.ToString();
+
+		_ = esql.Should().Contain(@"""a\nb""");
+	}
+
+	[Test]
+	public void AQuoteInAContainsValue_IsEscapedOnce()
+	{
+		// the pattern escapes the LIKE wildcards and the literal escapes the quote:
+		// escaping the quote in both places would emit one backslash too many
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains("a\"b")))
+			.ToString();
+
+		_ = esql.Should().Contain(@"LIKE ""*a\""b*""");
+	}
 }

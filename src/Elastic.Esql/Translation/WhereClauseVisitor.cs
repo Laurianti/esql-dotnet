@@ -10,7 +10,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
+using Elastic.Esql.Formatting;
 using Elastic.Esql.Functions;
+using Elastic.Esql.QueryModel.Commands;
 
 namespace Elastic.Esql.Translation;
 
@@ -350,6 +352,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for DateTime property access.")
 		};
 
+	/// <summary>
+	/// The column a field expression names, with the compiler's transparent-identifier
+	/// prefixes stripped the way ordinary field predicates do.
+	/// </summary>
+	private string ResolveMultiValueField(Expression expression) =>
+		expression is MemberExpression member
+			? ResolveFieldPath(member)
+			: expression.ResolveFieldName(_context.Metadata);
+
 	private string ResolveFieldPath(MemberExpression member)
 	{
 		var remainingPath = member.ResolveFieldName(_context.Metadata);
@@ -563,7 +574,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private bool IsDocumentParameter(ParameterExpression parameter) =>
 		!parameter.Type.IsValueType
 		&& parameter.Type != typeof(string)
-		&& (_context.ElementType is null || parameter.Type == _context.ElementType);
+		&& (_context.ElementType is null || parameter.Type == _context.ElementType)
+		// Matching the element type is not enough: a recursive type projects to itself,
+		// as in ".Select(n => n.Child)" over "Node.Child : Node?", and the projected
+		// value may well be null. Once anything has been projected the parameter is no
+		// longer known to be the document row.
+		&& !_context.Commands.Any(command => command is KeepCommand or EvalCommand);
 
 	/// <summary>
 	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
@@ -816,7 +832,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			// MV_COUNT is null over a missing field, and so would be the negation; LINQ
 			// reads a missing field as an empty sequence, where Any() is simply false
-			_ = _builder.Append("COALESCE(MV_COUNT(").Append(source.ResolveFieldName(_context.Metadata)).Append("), 0) > 0");
+			_ = _builder.Append("COALESCE(MV_COUNT(").Append(ResolveMultiValueField(source)).Append("), 0) > 0");
 			return true;
 		}
 
@@ -988,7 +1004,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private bool TryAppendQuantified(Expression field, Type elementType, bool all, ElementPredicate predicate)
 	{
-		var name = field.ResolveFieldName(_context.Metadata);
+		var name = ResolveMultiValueField(field);
 
 		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
 		if (predicate.Negated)
@@ -1140,6 +1156,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return true;
 	}
 
+	/// <summary>
+	/// Escapes what a LIKE pattern reads as a wildcard, leaving the string literal's own
+	/// escaping to <see cref="EsqlFormatting.FormatString"/>.
+	/// </summary>
+	private static string EscapeLikeMetacharacters(string value) =>
+		value.Replace("\\", "\\\\").Replace("*", "\\*").Replace("?", "\\?");
+
 	/// <summary>One value of a multi-value field, tested against the predicate.</summary>
 	private void AppendValuePredicate(string value, bool isString, ElementPredicateKind kind, IReadOnlyList<string> values)
 	{
@@ -1148,17 +1171,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		switch (kind)
 		{
 			case ElementPredicateKind.StartsWith:
-				_ = _builder.Append("STARTS_WITH(").Append(text).Append(", \"")
-					.Append(EscapeStringLiteral(values[0])).Append("\")");
+				_ = _builder.Append("STARTS_WITH(").Append(text).Append(", ")
+					.Append(EsqlFormatting.FormatString(values[0])).Append(')');
 				break;
 
 			case ElementPredicateKind.EndsWith:
-				_ = _builder.Append("ENDS_WITH(").Append(text).Append(", \"")
-					.Append(EscapeStringLiteral(values[0])).Append("\")");
+				_ = _builder.Append("ENDS_WITH(").Append(text).Append(", ")
+					.Append(EsqlFormatting.FormatString(values[0])).Append(')');
 				break;
 
 			case ElementPredicateKind.Contains:
-				_ = _builder.Append(text).Append(" LIKE \"*").Append(EscapeLikePattern(values[0])).Append("*\"");
+				// only the LIKE metacharacters are escaped here; the surrounding string
+				// literal is the formatter's job, and escaping twice would double the
+				// backslashes it adds
+				_ = _builder.Append(text).Append(" LIKE ")
+					.Append(EsqlFormatting.FormatString("*" + EscapeLikeMetacharacters(values[0]) + "*"));
 				break;
 
 			case ElementPredicateKind.In:
@@ -1169,28 +1196,25 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					if (i > 0)
 						_ = _builder.Append(" OR ");
 
-					_ = _builder.Append(text).Append(" == \"").Append(EscapeStringLiteral(values[i])).Append('"');
+					_ = _builder.Append(text).Append(" == ").Append(EsqlFormatting.FormatString(values[i]));
 				}
 
 				_ = _builder.Append(')');
 				break;
 
 			default:
-				_ = _builder.Append(text).Append(" == \"").Append(EscapeStringLiteral(values[0])).Append('"');
+				_ = _builder.Append(text).Append(" == ").Append(EsqlFormatting.FormatString(values[0]));
 				break;
 		}
 	}
 
-	/// <summary>Escapes what a double-quoted ES|QL string literal reserves.</summary>
-	private static string EscapeStringLiteral(string value) =>
-		value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
 	private bool TryAppendMatch(Expression field, Expression value)
 	{
 		if (!TryGetConstant(value, out var constant))
 			return false;
 
-		AppendMatch(field.ResolveFieldName(_context.Metadata), constant);
+		AppendMatch(ResolveMultiValueField(field), constant);
 		return true;
 	}
 

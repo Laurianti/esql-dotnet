@@ -172,4 +172,19 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void ANullComparisonAfterAnyProjection_IsRefused()
+	{
+		// the projected value may be null even when its type matches the document's,
+		// which is what a self-referencing type does
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(message => message == null);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }
