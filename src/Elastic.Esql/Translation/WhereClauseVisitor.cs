@@ -35,6 +35,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	protected override Expression VisitBinary(BinaryExpression node)
 	{
+		// a.CompareTo(b) > 0 and string.Compare(a, b) > 0 are the idiomatic way to
+		// order strings in LINQ: rewrite them into a direct comparison, which ES|QL
+		// supports natively on keyword fields.
+		if (TryVisitStringComparison(node))
+			return node;
+
 		if (TryVisitRootNullGuard(node))
 			return node;
 
@@ -500,6 +506,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
+	/// <c>a &gt; b</c>. Only comparisons against the constant zero are handled, which is
+	/// the only shape that carries an ordering meaning.
+	/// </summary>
+	/// <summary>
 	/// "p != null" on the lambda parameter itself: the document is never null, and
 	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
 	/// </summary>
@@ -515,6 +526,45 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 
 		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "FALSE" : "TRUE");
+		return true;
+	}
+
+	private bool TryVisitStringComparison(BinaryExpression node)
+	{
+		if (node.NodeType is not (ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
+			or ExpressionType.LessThan or ExpressionType.LessThanOrEqual))
+			return false;
+
+		var (call, zero, flipped) = node.Left is MethodCallExpression left
+			? (left, node.Right, false)
+			: node.Right is MethodCallExpression right ? (right, node.Left, true) : (null, null, false);
+
+		if (call is null || zero is not ConstantExpression { Value: 0 })
+			return false;
+
+		if (call.Method.DeclaringType != typeof(string) || call.Method.Name is not ("CompareTo" or "Compare"))
+			return false;
+
+		// instance form: a.CompareTo(b); static form: string.Compare(a, b)
+		var (first, second) = call.Object is not null
+			? (call.Object, call.Arguments[0])
+			: call.Arguments.Count >= 2 ? (call.Arguments[0], call.Arguments[1]) : (null, null);
+
+		if (first is null || second is null)
+			return false;
+
+		var op = node.NodeType switch
+		{
+			ExpressionType.GreaterThan => flipped ? "<" : ">",
+			ExpressionType.GreaterThanOrEqual => flipped ? "<=" : ">=",
+			ExpressionType.LessThan => flipped ? ">" : "<",
+			_ => flipped ? ">=" : "<="
+		};
+
+		_ = Visit(first);
+		_ = _builder.Append(' ').Append(op).Append(' ');
+		_ = Visit(second);
+
 		return true;
 	}
 
@@ -547,6 +597,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				var endsValue = GetConstantValue(node.Arguments[0]);
 				_ = _builder.Append("\"*").Append(EscapeLikePattern(endsValue?.ToString() ?? "")).Append('"');
 				break;
+
+			case "CompareTo":
+			case "Compare":
+				// string.CompareTo(x) and string.Compare(a, b) only appear inside a
+				// comparison against zero, which the binary visitor rewrites into a
+				// direct comparison between the two operands.
+				throw new NotSupportedException(
+					$"String method {methodName} is only supported when compared to zero, "
+					+ "for example a.CompareTo(b) > 0.");
 
 			case "IsNullOrEmpty":
 				_ = _builder.Append('(');
