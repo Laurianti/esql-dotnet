@@ -33,7 +33,58 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*CompareOrdinal*");
+	}
+
+	[Test]
+	public void CompareTo_IsRefusedForOrderingByCulture()
+	{
+		// CompareTo orders by the current culture, where "B" sorts after "a"; a keyword
+		// field is ordered by its UTF-8 bytes, which is what CompareOrdinal asks for
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.CompareTo("m") > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*CompareOrdinal*");
+	}
+
+	[Test]
+	public void TwoArgumentCompare_IsRefusedForOrderingByCulture()
+	{
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.Message, "m") > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*CompareOrdinal*");
+	}
+
+	[Test]
+	public void CompareOrdinalOverARange_IsRefused()
+	{
+		// ordinal, but over a substring of each operand: not the ordering of the field
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, 0, "m", 0, 1) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*overload*");
+	}
+
+	[Test]
+	public void CompareToOutsideAComparisonAgainstZero_IsRefused()
+	{
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, "m") == 1);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*against zero*");
 	}
 
 	[Test]
@@ -88,31 +139,31 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareToNull_IsRefused()
+	public void CompareOrdinalAgainstNull_IsRefused()
 	{
 		// .NET orders a non-null string above null; an ES|QL comparison against null
 		// does not reproduce that
 		var query = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => l.Message.CompareTo((string?)null) > 0);
+			.Where(l => string.CompareOrdinal(l.Message, (string?)null) > 0);
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*IS NULL*");
 	}
 
 	[Test]
-	public void CompareToACapturedNull_IsRefused()
+	public void CompareOrdinalAgainstACapturedNull_IsRefused()
 	{
 		var missing = (string?)null;
 
 		var query = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => l.Message.CompareTo(missing) > 0);
+			.Where(l => string.CompareOrdinal(l.Message, missing) > 0);
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*IS NULL*");
 	}
 
 	[Test]

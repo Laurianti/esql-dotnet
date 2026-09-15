@@ -36,9 +36,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	protected override Expression VisitBinary(BinaryExpression node)
 	{
-		// a.CompareTo(b) > 0 and string.Compare(a, b) > 0 are the idiomatic way to
-		// order strings in LINQ: rewrite them into a direct comparison, which ES|QL
-		// supports natively on keyword fields.
+		// string.CompareOrdinal(a, b) > 0 is the way to order strings in LINQ: rewrite it
+		// into a direct comparison, which ES|QL supports natively on keyword fields.
 		if (TryVisitStringComparison(node))
 			return node;
 
@@ -581,20 +580,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& !_context.HasProjected;
 
 	/// <summary>
-	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
-	/// <c>a &gt; b</c>. Only comparisons against the constant zero are handled, which is
-	/// the only shape that carries an ordering meaning.
+	/// Rewrites <c>string.CompareOrdinal(a, b) &gt; 0</c>, or
+	/// <c>string.Compare(a, b, StringComparison.Ordinal) &gt; 0</c>, into <c>a &gt; b</c>.
+	/// Only comparisons against the constant zero carry an ordering, and only the
+	/// explicitly ordinal forms are accepted: <c>CompareTo</c> and the two-argument
+	/// <c>Compare</c> order by the current culture, which is not something ES|QL can be
+	/// asked for, so they are refused with a pointer to the ordinal forms.
 	/// <para>
-	/// The ordering is the one Elasticsearch applies to a keyword field, which compares
-	/// the UTF-8 bytes: <c>"B"</c> sorts before <c>"a"</c>, where .NET's culture-sensitive
-	/// overloads answer the other way round. Sorting and paging over a keyword field are
-	/// byte-ordered to begin with, which is what this rewrite exists for.
-	/// </para>
-	/// <para>
-	/// The two are not identical even so: .NET's ordinal comparison reads UTF-16 code
-	/// units, so a supplementary character sorts before U+E000 there and after it by
-	/// UTF-8 bytes. They agree over the Basic Multilingual Plane, and diverge only for
-	/// values mixing surrogate pairs with the private-use area.
+	/// Even the ordinal forms are not identical to what Elasticsearch does: .NET compares
+	/// UTF-16 code units, Elasticsearch the UTF-8 bytes of a keyword, so a supplementary
+	/// character sorts before U+E000 in .NET and after it in Elasticsearch. They agree
+	/// over the Basic Multilingual Plane, which is where keys of this kind live.
 	/// </para>
 	/// </summary>
 	private bool TryVisitStringComparison(BinaryExpression node)
@@ -614,35 +610,30 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			|| call.Method.Name is not ("CompareTo" or "Compare" or "CompareOrdinal"))
 			return false;
 
-		var parameters = call.Method.GetParameters();
-
 		// From here the shape is the supported one, so anything refused is refused with
 		// its own reason rather than the generic "only when compared to zero" message.
-		var instanceForm = call.Object is not null;
-		var supportedOverload = instanceForm
-			? parameters.Length == 1 && parameters[0].ParameterType == typeof(string)
-			: parameters.Length is 2 or 3
-				&& parameters[0].ParameterType == typeof(string)
-				&& parameters[1].ParameterType == typeof(string)
-				&& (parameters.Length == 2 || parameters[2].ParameterType == typeof(StringComparison));
+		var parameters = call.Method.GetParameters();
+		var ordinalForm = call.Object is null
+			&& parameters.Length is 2 or 3
+			&& parameters[0].ParameterType == typeof(string)
+			&& parameters[1].ParameterType == typeof(string)
+			&& (call.Method.Name == "CompareOrdinal"
+				? parameters.Length == 2
+				: parameters.Length == 3 && parameters[2].ParameterType == typeof(StringComparison));
 
-		if (!supportedOverload)
+		if (!ordinalForm)
 		{
 			throw new NotSupportedException(
-				$"String method {call.Method.Name} is only supported when comparing two strings, "
-				+ "optionally with a StringComparison; an overload taking a culture, an ignore-case "
-				+ "flag, a range or a non-string operand orders something ES|QL does not.");
+				$"String method {call.Method.Name} is only supported as string.CompareOrdinal(a, b) or "
+				+ "string.Compare(a, b, StringComparison.Ordinal): every other overload orders by the "
+				+ "current culture, an ignore-case flag, a range or a non-string operand, none of "
+				+ "which is the UTF-8 byte ordering ES|QL applies to a keyword field.");
 		}
 
-		var (first, second) = instanceForm
-			? (call.Object!, call.Arguments[0])
-			: (call.Arguments[0], call.Arguments[1]);
-		var comparison = parameters.Length == 3 ? call.Arguments[2] : null;
+		var first = call.Arguments[0];
+		var second = call.Arguments[1];
 
-		// ES|QL orders keyword values by their UTF-8 bytes, which an explicitly ordinal
-		// comparison asks for; a culture-sensitive one asks for something else and is
-		// refused rather than answered with an ordering it did not request.
-		if (comparison is not null && !IsOrdinalComparison(comparison))
+		if (parameters.Length == 3 && !IsOrdinalComparison(call.Arguments[2]))
 		{
 			throw new NotSupportedException(
 				$"String method {call.Method.Name} is only supported with StringComparison.Ordinal: "
@@ -668,12 +659,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => flipped ? ">=" : "<="
 		};
 
-		// .NET orders null before every string: string.Compare(null, "m") is negative and
-		// "m".CompareTo(null) is positive. A comparison against a missing field is null in
-		// ES|QL and drops the row, so a field that can be missing has its side of the
-		// ordering spelled out. The receiver of the instance form is left alone: a null
-		// receiver throws in .NET, so there is no ordering to reproduce.
-		var firstMayBeMissing = instanceForm ? null : AsNullableField(first);
+		// .NET orders null before every string. A comparison against a missing field is
+		// null in ES|QL and drops the row, so a field that can be missing has its side of
+		// the ordering spelled out.
+		var firstMayBeMissing = AsNullableField(first);
 		var secondMayBeMissing = AsNullableField(second);
 
 		if (firstMayBeMissing is not null && secondMayBeMissing is not null)
@@ -805,12 +794,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			case "CompareTo":
 			case "Compare":
 			case "CompareOrdinal":
-				// string.CompareTo(x) and string.Compare(a, b) only carry an ordering
-				// inside a comparison against zero, which the binary visitor rewrites into
-				// a direct comparison between the two operands.
+				// an ordering only exists inside a comparison against zero, which the binary
+				// visitor rewrites into a direct comparison, and only for the ordinal forms
 				throw new NotSupportedException(
-					$"String method {methodName} is only supported in an ordering comparison "
-					+ "against zero, for example a.CompareTo(b) > 0.");
+					$"String method {methodName} is only supported as string.CompareOrdinal(a, b) "
+					+ "or string.Compare(a, b, StringComparison.Ordinal) inside an ordering "
+					+ "comparison against zero, for example string.CompareOrdinal(a, b) > 0.");
 
 			case "IsNullOrEmpty":
 				_ = _builder.Append('(');

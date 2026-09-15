@@ -5,89 +5,13 @@
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
-/// Ordering comparisons between strings, written in LINQ as CompareTo against zero.
+/// Ordering comparisons between strings, written in LINQ as CompareOrdinal against zero.
 /// These are what keyset pagination needs when the tie-breaker is a text field.
 /// </summary>
 public class StringComparisonTests : EsqlTestBase
 {
 	[Test]
-	public void CompareTo_GreaterThanZero_TranslatesToGreaterThan()
-	{
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => l.Message.CompareTo("m") > 0)
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE message > "m"
-            """.NativeLineEndings());
-	}
-
-	[Test]
-	public void CompareTo_LessThanOrEqualZero_TranslatesToLessThanOrEqual()
-	{
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => l.Message.CompareTo("m") <= 0)
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE message <= "m"
-            """.NativeLineEndings());
-	}
-
-	[Test]
-	public void StaticCompare_TranslatesToTheSameComparison()
-	{
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => string.Compare(l.Message, "m") > 0)
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE message > "m"
-            """.NativeLineEndings());
-	}
-
-	[Test]
-	public void ZeroOnTheLeft_FlipsTheOperator()
-	{
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => 0 < l.Message.CompareTo("m"))
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE message > "m"
-            """.NativeLineEndings());
-	}
-
-	[Test]
-	public void AKeysetPredicate_TranslatesAsAWhole()
-	{
-		// the shape keyset pagination produces when the tie-breaker is a text field
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => l.Duration > 1.5 || (l.Duration == 1.5 && l.Message.CompareTo("m") > 0))
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE (duration > 1.5 OR (duration == 1.5 AND message > "m"))
-            """.NativeLineEndings());
-	}
-
-	[Test]
-	public void CompareOrdinal_IsTranslated()
+	public void CompareOrdinal_GreaterThanZero_TranslatesToGreaterThan()
 	{
 		// the ordering ES|QL applies to a keyword field is ordinal, so this is the form
 		// that means exactly what the translation performs
@@ -104,7 +28,22 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareWithOrdinalComparison_IsTranslated()
+	public void CompareOrdinal_LessThanOrEqualZero_TranslatesToLessThanOrEqual()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, "m") <= 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message <= "m"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void CompareWithOrdinalComparison_TranslatesToTheSameComparison()
 	{
 		var esql = CreateQuery<LogEntry>()
 			.From("logs-*")
@@ -115,6 +54,37 @@ public class StringComparisonTests : EsqlTestBase
 			"""
             FROM logs-*
             | WHERE message > "m"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void ZeroOnTheLeft_FlipsTheOperator()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => 0 < string.CompareOrdinal(l.Message, "m"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message > "m"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AKeysetPredicate_TranslatesAsAWhole()
+	{
+		// the shape keyset pagination produces when the tie-breaker is a text field
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Duration > 1.5 || (l.Duration == 1.5 && string.CompareOrdinal(l.Message, "m") > 0))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (duration > 1.5 OR (duration == 1.5 AND message > "m"))
             """.NativeLineEndings());
 	}
 
@@ -151,22 +121,6 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareToOverANullableField_NeedsNoGuard()
-	{
-		// the instance form throws on a null receiver, so there is no ordering to encode
-		var esql = CreateQuery<LogEntry>()
-			.From("logs-*")
-			.Where(l => l.ClientIp!.CompareTo("m") < 0)
-			.ToString();
-
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE clientIp < "m"
-            """.NativeLineEndings());
-	}
-
-	[Test]
 	public void StaticCompareWithTheNullableFieldOnTheRight_GuardsTheOtherWay()
 	{
 		// null sorts first, so "m" compared against a missing value is above it: the
@@ -199,14 +153,13 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareToWithANullableArgument_GuardsTheArgument()
+	public void CompareOrdinalWithANullableSecondField_GuardsThatField()
 	{
-		// "m".CompareTo(null) is positive in .NET: the receiver is above a missing
-		// argument, so the missing value stays in for ">" even though the instance form
-		// has no ordering for a missing receiver
+		// string.CompareOrdinal("m", null) is positive in .NET: the first operand is
+		// above a missing second one, so the missing value stays in for ">"
 		var esql = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => l.Message.CompareTo(l.ClientIp) > 0)
+			.Where(l => string.CompareOrdinal(l.Message, l.ClientIp) > 0)
 			.ToString();
 
 		_ = esql.Should().Be(
