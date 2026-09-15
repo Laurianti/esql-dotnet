@@ -387,10 +387,24 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			MemberInitExpression init => init.Bindings.OfType<MemberAssignment>() is var bindings
 				&& bindings.Any()
 				&& bindings.All(b => ReadsThrough(b.Expression, path)),
-			MethodCallExpression call => call.Object is not null && ReadsThrough(call.Object, path),
+			// a call reads through the path when its receiver or one of its arguments does,
+			// provided the function is null over a null input: every scalar function is,
+			// except the few that exist to answer null, which would give a missing parent
+			// a value
+			MethodCallExpression call => PropagatesNull(call.Method)
+				&& ((call.Object is not null && ReadsThrough(call.Object, path))
+					|| call.Arguments.Any(argument => ReadsThrough(argument, path))),
 			_ => false
 		};
 	}
+
+	/// <summary>
+	/// Whether the ES|QL function the method translates to is null when an input is
+	/// null. COALESCE, IS NULL and IS NOT NULL are the ones that are not.
+	/// </summary>
+	private static bool PropagatesNull(MethodInfo method) =>
+		method.DeclaringType != typeof(EsqlFunctions)
+		|| method.Name is not (nameof(EsqlFunctions.Coalesce) or nameof(EsqlFunctions.IsNull) or nameof(EsqlFunctions.IsNotNull));
 
 	private static bool SameMemberPath(Expression left, Expression right) => (left, right) switch
 	{

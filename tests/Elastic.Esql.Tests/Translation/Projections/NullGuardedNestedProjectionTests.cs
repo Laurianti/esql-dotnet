@@ -64,6 +64,44 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAFunctionOfTheGuardedPath_IsUnwrapped()
+	{
+		// TRIM of a missing value is null, as every scalar function is over a null input,
+		// so the branch is null exactly when the guard says so and the guard can go
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = EsqlFunctions.Trim(l.Host.Name) }
+			})
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL host.name = TRIM(host.name)
+            | KEEP host.name
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AGuardOverAFunctionThatAnswersNull_IsRefused()
+	{
+		// COALESCE gives a missing value a value of its own, so for a document with no
+		// Host the child would carry "x" where the source gives null
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = EsqlFunctions.Coalesce(l.Host.Name, "x") }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAChildWithAConstantMember_IsRefused()
 	{
 		// one member reads through Host, the other is a constant: for a document with
