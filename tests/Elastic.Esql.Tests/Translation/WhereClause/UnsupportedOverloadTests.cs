@@ -127,4 +127,19 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void AConstantCollectionHoldingNull_IsRefused()
+	{
+		// a stored value is never null, so there is nothing for MATCH to match
+		var candidates = new string?[] { null, "x" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => candidates.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }

@@ -256,7 +256,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MV_MAX(ratings) > 3
+            | WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
             """.NativeLineEndings());
 	}
 
@@ -301,7 +301,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MV_MIN(ratings) < 3
+            | WHERE (ratings IS NOT NULL AND MV_MIN(ratings) < 3)
             """.NativeLineEndings());
 	}
 
@@ -316,7 +316,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MV_MAX(ratings) > 3
+            | WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
             """.NativeLineEndings());
 	}
 
@@ -334,10 +334,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
-	public void ANegatedQuantifierKeepsTheMissingFieldGuardOfTheOriginal()
+	public void ANegatedQuantifierStaysDefinedOverAMissingField()
 	{
-		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
-		// satisfies the All that was written, so the guard follows the original
+		// MV_MAX is null over a missing field, so the predicate has to say explicitly
+		// that the field is present, or an enclosing NOT would answer neither way
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Ratings.All(r => !(r > 3)))
@@ -346,7 +346,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (ratings IS NULL OR NOT MV_MAX(ratings) > 3)
+            | WHERE NOT (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
             """.NativeLineEndings());
 	}
 

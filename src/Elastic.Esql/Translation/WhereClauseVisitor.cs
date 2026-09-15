@@ -512,11 +512,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
-	/// <c>a &gt; b</c>. Only comparisons against the constant zero are handled, which is
-	/// the only shape that carries an ordering meaning.
-	/// </summary>
-	/// <summary>
 	/// "p != null" on the lambda parameter itself: the document is never null, and
 	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
 	/// </summary>
@@ -525,8 +520,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
 			return false;
 
-		var isRootGuard = (node.Left is ParameterExpression && IsNullConstant(node.Right))
-			|| (node.Right is ParameterExpression && IsNullConstant(node.Left));
+		var isRootGuard = (node.Left is ParameterExpression && ResolvesToNullConstant(node.Right))
+			|| (node.Right is ParameterExpression && ResolvesToNullConstant(node.Left));
 
 		if (!isRootGuard)
 			return false;
@@ -535,6 +530,18 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return true;
 	}
 
+	/// <summary>
+	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
+	/// <c>a &gt; b</c>. Only comparisons against the constant zero are handled, which is
+	/// the only shape that carries an ordering meaning.
+	/// <para>
+	/// The ordering itself is the one Elasticsearch applies to a keyword field, which
+	/// is ordinal: <c>"B"</c> sorts before <c>"a"</c>. In .NET these overloads are
+	/// culture-sensitive and would answer the other way round, so the two agree only
+	/// for values that order the same either way. Sorting and paging over a keyword
+	/// field are ordinal to begin with, which is what this rewrite exists for.
+	/// </para>
+	/// </summary>
 	private bool TryVisitStringComparison(BinaryExpression node)
 	{
 		if (node.NodeType is not (ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
@@ -704,20 +711,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return node;
 	}
 
-	/// <summary>
-	/// Translates predicates over a multi-value document field into MATCH, which
-	/// matches a document when any of the field's values matches, without the row
-	/// duplication that MV_EXPAND would introduce.
-	/// <para>
-	/// Supported shapes: <c>field.Any(x =&gt; x == value)</c>, <c>field.Any()</c>,
-	/// <c>field.Contains(value)</c>.
-	/// </para>
-	/// </summary>
-	/// <summary>
-	/// Separates the values of a multi-value field when they are joined into one
-	/// string for a regular expression: the ASCII unit separator, which is reserved
-	/// for exactly this and does not occur in data.
-	/// </summary>
 	private const string ValueSeparator = "\u001F";
 
 	private enum ElementPredicateKind
@@ -737,9 +730,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private readonly record struct ElementPredicate(ElementPredicateKind Kind, IReadOnlyList<object?> Values, bool Negated);
 
 	/// <summary>
-	/// Predicates over multi-value document fields: field.Any(...), field.All(...) and
-	/// field.Contains(value). A document holds every value of the field at once, so
-	/// the quantifier is answered on the field itself, without expanding rows.
+	/// Predicates over a multi-value document field: <c>field.Any(...)</c>,
+	/// <c>field.All(...)</c> and <c>field.Contains(value)</c>. A document holds every
+	/// value of the field at once, so the quantifier is answered on the field itself,
+	/// without the row duplication MV_EXPAND would introduce.
 	/// </summary>
 	private bool TryVisitMultiValueField(MethodCallExpression node)
 	{
@@ -855,18 +849,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a")
 				if (call.Object == element && call.Method.DeclaringType == typeof(string) && call.Arguments.Count == 1)
 				{
-					ElementPredicateKind? kind = call.Method.Name switch
-					{
-						"StartsWith" => ElementPredicateKind.StartsWith,
-						"EndsWith" => ElementPredicateKind.EndsWith,
-						"Contains" => ElementPredicateKind.Contains,
-						_ => null
-					};
-
-					if (kind is null || !TryGetConstant(call.Arguments[0], out var constant))
+					if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
+						|| !TryGetConstant(call.Arguments[0], out var constant))
 						return null;
 
-					return new ElementPredicate(kind.Value, [constant], negated);
+					return new ElementPredicate(kind, [constant], negated);
 				}
 
 				// values.Contains(x), over a constant collection
@@ -874,7 +861,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					&& valueExpression == element
 					&& collection is not null)
 				{
-					return new ElementPredicate(ElementPredicateKind.In, collection.Cast<object?>().ToList(), negated);
+					var candidates = collection.Cast<object?>().ToList();
+
+					// a stored value is never null, and MATCH(field, null) is not valid ES|QL
+					if (candidates.Any(candidate => candidate is null))
+						return null;
+
+					return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
 				}
 
 				return null;
@@ -882,6 +875,29 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 			default:
 				return null;
+		}
+	}
+
+	/// <summary>The kind of the string predicates MATCH cannot answer on its own.</summary>
+	private static bool TryGetTextPredicateKind(string methodName, out ElementPredicateKind kind)
+	{
+		switch (methodName)
+		{
+			case "StartsWith":
+				kind = ElementPredicateKind.StartsWith;
+				return true;
+
+			case "EndsWith":
+				kind = ElementPredicateKind.EndsWith;
+				return true;
+
+			case "Contains":
+				kind = ElementPredicateKind.Contains;
+				return true;
+
+			default:
+				kind = default;
+				return false;
 		}
 	}
 
@@ -920,16 +936,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
 		// satisfies the All that was written, so its guard is emitted around the
 		// negation rather than inside it
-		var vacuouslyTrue = all;
-		var guardsMissingField = vacuouslyTrue
-			&& predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual
-				or ElementPredicateKind.LessThan or ElementPredicateKind.LessThanOrEqual;
-
-		if (guardsMissingField && predicate.Negated)
-			_ = _builder.Append('(').Append(name).Append(" IS NULL OR ");
-
-		var negated = predicate.Negated;
-
 		if (predicate.Negated)
 		{
 			_ = _builder.Append("NOT ");
@@ -989,21 +995,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					_ => "<="
 				};
 
-				// All() over a missing field holds; when a negation flipped the
-				// quantifier the guard was already emitted around it
-				var guardHere = vacuouslyTrue && !negated;
-
-				if (guardHere)
-					_ = _builder.Append('(').Append(name).Append(" IS NULL OR ");
+				// MV_MIN and MV_MAX are null over a missing field, and so would be the
+				// whole predicate, which then answers neither true nor false. A missing
+				// field is an empty sequence: All holds over it and Any does not, and
+				// saying so explicitly keeps an enclosing NOT meaningful.
+				_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
 
 				_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
-					.Append(_context.FormatValue(predicate.Values[0], null));
-
-				if (guardHere)
-					_ = _builder.Append(')');
-
-				if (guardsMissingField && negated)
-					_ = _builder.Append(')');
+					.Append(_context.FormatValue(predicate.Values[0], null)).Append(')');
 
 				return true;
 			}
@@ -1032,7 +1031,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!isString && (!isIntegral || predicate.Kind is not (ElementPredicateKind.Equal or ElementPredicateKind.In)))
 			return false;
 
-		var values = predicate.Values.Select(v => v?.ToString() ?? "").ToList();
+		// TO_STRING renders numbers the way Elasticsearch does, which is invariant;
+		// the current culture could otherwise introduce separators of its own
+		var values = predicate.Values
+			.Select(v => v is IFormattable formattable
+				? formattable.ToString(null, CultureInfo.InvariantCulture)
+				: v?.ToString() ?? "")
+			.ToList();
 
 		foreach (var value in values)
 		{

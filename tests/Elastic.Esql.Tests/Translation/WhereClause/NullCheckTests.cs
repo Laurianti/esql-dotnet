@@ -67,4 +67,21 @@ public class NullCheckTests : EsqlTestBase
             | WHERE FALSE
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void ACapturedNullRootGuard_IsAlsoAConstant()
+	{
+		var missing = (LogEntry?)null;
+
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l != missing)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE TRUE
+            """.NativeLineEndings());
+	}
 }
