@@ -1109,7 +1109,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return true;
 		}
 
-		_ = _builder.Append('(');
+		// A field holding more values than the positions read cannot be answered from
+		// those positions alone, and saying "false" would let an enclosing NOT turn it
+		// into a match. The predicate is null there instead, which WHERE drops either
+		// way, so such a document is left out of the result rather than answered wrongly.
+		_ = _builder.Append("CASE(MV_COUNT(").Append(field).Append(") > ").Append(MaxInspectedValues).Append(", NULL, (");
 
 		for (var position = 0; position < MaxInspectedValues; position++)
 		{
@@ -1132,7 +1136,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
 		}
 
-		_ = _builder.Append(')');
+		// closes the positions, then the CASE
+		_ = _builder.Append("))");
 		return true;
 	}
 

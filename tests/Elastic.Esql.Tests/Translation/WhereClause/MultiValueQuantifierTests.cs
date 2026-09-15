@@ -1,4 +1,4 @@
-// Licensed to Elasticsearch B.V under one or more agreements.
+﻿// Licensed to Elasticsearch B.V under one or more agreements.
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
@@ -13,19 +13,26 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	// how many positions the translation reads, one MV_SLICE each
 	private const int Positions = 32;
 
+	/// <summary>
+	/// A field holding more values than the positions read is answered as null, which
+	/// WHERE drops whether or not a NOT encloses it.
+	/// </summary>
+	private static string Bounded(string field, string positions) =>
+		$"CASE(MV_COUNT({field}) > {Positions}, NULL, ({positions}))";
+
 	/// <summary>Any: the test holds at some position; an absent value does not count.</summary>
 	private static string AnyOf(string field, Func<string, string> test) =>
-		"(" + string.Join(" OR ", Enumerable.Range(0, Positions)
-			.Select(position => $"COALESCE({test($"MV_SLICE({field}, {position}, {position})")}, false)")) + ")";
+		Bounded(field, string.Join(" OR ", Enumerable.Range(0, Positions)
+			.Select(position => $"COALESCE({test($"MV_SLICE({field}, {position}, {position})")}, false)")));
 
 	/// <summary>All: the test holds at every position that has a value.</summary>
 	private static string AllOf(string field, Func<string, string> test) =>
-		"(" + string.Join(" AND ", Enumerable.Range(0, Positions)
+		Bounded(field, string.Join(" AND ", Enumerable.Range(0, Positions)
 			.Select(position =>
 			{
 				var value = $"MV_SLICE({field}, {position}, {position})";
 				return $"COALESCE({value} IS NULL OR {test(value)}, true)";
-			})) + ")";
+			})));
 
 	[Test]
 	public void Any_StartsWith_MatchesSomeValue()
@@ -380,5 +387,31 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AFieldBeyondTheInspectedPositions_IsAnsweredAsNull()
+	{
+		// The predicate reads a fixed number of positions, so a field holding more values
+		// cannot be answered from them. Saying "false" would let an enclosing NOT turn it
+		// into a match, so the answer is null, which WHERE drops either way.
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Contain($"CASE(MV_COUNT(tags) > {Positions}, NULL,");
+	}
+
+	[Test]
+	public void ANegatedPredicateKeepsTheSameBound()
+	{
+		// the bound is inside the CASE, so the negation cannot turn it into a match
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !p.Tags.Any(t => t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Contain($"NOT CASE(MV_COUNT(tags) > {Positions}, NULL,");
 	}
 }
