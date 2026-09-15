@@ -22,6 +22,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private readonly EsqlTranslationContext _context = context ?? throw new ArgumentNullException(nameof(context));
 	private readonly StringBuilder _builder = new();
 	private MemberInfo? _comparisonPropertyContext;
+	private bool _insideNegation;
+	private string? _pendingEncodingGuard;
 
 	/// <summary>
 	/// Translates a predicate expression to an ES|QL condition string.
@@ -185,9 +187,36 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		switch (node.NodeType)
 		{
 			case ExpressionType.Not:
-				_ = _builder.Append("NOT ");
+			{
+				// A multi-value predicate emits a guard stating that its encoding can be
+				// trusted, and this negation must not flip it. The operand is translated
+				// first, so the guard it asks for can be placed ahead of the NOT.
+				var start = _builder.Length;
+				var wasNegated = _insideNegation;
+				var outerGuard = _pendingEncodingGuard;
+
+				_insideNegation = true;
+				_pendingEncodingGuard = null;
+
 				_ = Visit(node.Operand);
+
+				var translated = _builder.ToString(start, _builder.Length - start);
+				_ = _builder.Remove(start, _builder.Length - start);
+
+				if (_pendingEncodingGuard is null)
+				{
+					_ = _builder.Append("NOT ").Append(translated);
+				}
+				else
+				{
+					_ = _builder.Append('(').Append(_pendingEncodingGuard)
+						.Append(" AND NOT ").Append(translated).Append(')');
+				}
+
+				_insideNegation = wasNegated;
+				_pendingEncodingGuard = outerGuard;
 				break;
+			}
 
 			case ExpressionType.Convert:
 			case ExpressionType.ConvertChecked:
@@ -520,15 +549,33 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
 			return false;
 
-		var isRootGuard = (node.Left is ParameterExpression && ResolvesToNullConstant(node.Right))
-			|| (node.Right is ParameterExpression && ResolvesToNullConstant(node.Left));
+		var parameter = node.Left is ParameterExpression left && ResolvesToNullConstant(node.Right) ? left
+			: node.Right is ParameterExpression right && ResolvesToNullConstant(node.Left) ? right
+			: null;
 
-		if (!isRootGuard)
+		if (parameter is null)
 			return false;
+
+		// Only the document row is known never to be null, and there the guard is a
+		// constant. After a projection the parameter stands for the projected value,
+		// which has no field name of its own to compare, so the shape is refused
+		// rather than folded into a constant that would drop every row.
+		if (!IsDocumentParameter(parameter))
+		{
+			throw new NotSupportedException(
+				"A null comparison against a projected value is not supported: compare the "
+				+ "document field instead, before the projection.");
+		}
 
 		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "FALSE" : "TRUE");
 		return true;
 	}
+
+	/// <summary>Whether the parameter stands for the document row rather than a projected value.</summary>
+	private bool IsDocumentParameter(ParameterExpression parameter) =>
+		!parameter.Type.IsValueType
+		&& parameter.Type != typeof(string)
+		&& (_context.ElementType is null || parameter.Type == _context.ElementType);
 
 	/// <summary>
 	/// Rewrites <c>a.CompareTo(b) &gt; 0</c> or <c>string.Compare(a, b) &gt; 0</c> into
@@ -936,6 +983,27 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// "All(not P)" is "not Any(P)": the quantifier flips, but a missing field still
 		// satisfies the All that was written, so its guard is emitted around the
 		// negation rather than inside it
+		// The encoding guard states that the joined string can be trusted, which is not
+		// something a user-level negation should flip: a row whose values collide with
+		// the separator has to stay out either way, so the guard is emitted first.
+		var name0 = field.ResolveFieldName(_context.Metadata);
+		var effectiveAll = predicate.Negated ? !all : all;
+		var guardsEncoding = predicate.Negated && UsesValuePattern(elementType, effectiveAll, predicate);
+
+		// inside a user-level NOT the guard is handed to the unary visitor, which puts
+		// it in front of the negation instead of underneath it
+		if (_insideNegation && UsesValuePattern(elementType, effectiveAll, predicate))
+		{
+			_pendingEncodingGuard = EncodingGuard(name0, elementType == typeof(string));
+			guardsEncoding = true;
+		}
+		else if (guardsEncoding)
+		{
+			_ = _builder.Append('(');
+			AppendEncodingGuard(name0, elementType == typeof(string));
+			_ = _builder.Append(" AND ");
+		}
+
 		if (predicate.Negated)
 		{
 			_ = _builder.Append("NOT ");
@@ -1008,9 +1076,31 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			}
 
 			default:
-				return TryAppendValuePattern(name, elementType, all, predicate);
+			{
+				if (!TryAppendValuePattern(name, elementType, all, predicate, guardsEncoding))
+					return false;
+
+				if (guardsEncoding && _pendingEncodingGuard is null)
+					_ = _builder.Append(')');
+
+				return true;
+			}
 		}
 	}
+
+	/// <summary>Whether the predicate is answered by a regular expression over the joined values.</summary>
+	/// <summary>
+	/// Whether the predicate is answered by a regular expression over the joined values,
+	/// which is what needs the encoding guard. Equality and membership are answered by
+	/// MATCH, except when All has to see every value at once.
+	/// </summary>
+	private static bool UsesValuePattern(Type elementType, bool all, ElementPredicate predicate) =>
+		predicate.Kind switch
+		{
+			ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains => true,
+			ElementPredicateKind.In => all && predicate.Values.Count > 0,
+			_ => false
+		};
 
 	private void AppendMatch(string field, object? value) =>
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(_context.FormatValue(value, null)).Append(')');
@@ -1020,7 +1110,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// into one string, "␟a␟b␟", and a regular expression checks either that some value
 	/// matches (Any) or that the string is made only of matching values (All).
 	/// </summary>
-	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate)
+	private bool TryAppendValuePattern(string field, Type elementType, bool all, ElementPredicate predicate, bool guardAlreadyEmitted)
 	{
 		var isString = elementType == typeof(string);
 		var isIntegral = elementType == typeof(int) || elementType == typeof(long)
@@ -1075,20 +1165,45 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			: ".*" + ValueSeparator + valuePattern + ValueSeparator + ".*";
 
 		var text = isString ? field : "TO_STRING(" + field + ")";
-		var joined = $"COALESCE(CONCAT(\"{ValueSeparator}\", MV_CONCAT({text}, \"{ValueSeparator}\"), \"{ValueSeparator}\"), \"{ValueSeparator}\")";
+		var joined = JoinedValues(field, isString);
 
-		// A stored value may hold the separator itself, which would split it into two
-		// synthetic values and match a pattern the real value does not. The joined
-		// string carries one separator per value plus one, so any excess gives the
-		// collision away, and such a document is left out rather than answered wrongly.
-		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{ValueSeparator}\", \"\")))";
+		if (!guardAlreadyEmitted)
+		{
+			_ = _builder.Append('(');
+			AppendEncodingGuard(field, isString);
+			_ = _builder.Append(" AND ");
+		}
 
-		_ = _builder
-			.Append('(').Append(separators)
-			.Append(" == COALESCE(MV_COUNT(").Append(field).Append("), 0) + 1 AND ")
-			.Append(joined).Append(" RLIKE \"\"\"").Append(pattern).Append("\"\"\")");
+		_ = _builder.Append(joined).Append(" RLIKE \"\"\"").Append(pattern).Append("\"\"\"");
+
+		if (!guardAlreadyEmitted)
+			_ = _builder.Append(')');
 
 		return true;
+	}
+
+	/// <summary>The field's values joined into one string, delimited by the separator.</summary>
+	private string JoinedValues(string field, bool isString)
+	{
+		var text = isString ? field : "TO_STRING(" + field + ")";
+
+		return $"COALESCE(CONCAT(\"{ValueSeparator}\", MV_CONCAT({text}, \"{ValueSeparator}\"), \"{ValueSeparator}\"), \"{ValueSeparator}\")";
+	}
+
+	/// <summary>
+	/// A stored value may hold the separator itself, which would split it into two
+	/// synthetic values and match a pattern the real value does not. The joined string
+	/// carries one separator per value plus one, so any excess gives the collision away.
+	/// </summary>
+	private void AppendEncodingGuard(string field, bool isString) =>
+		_ = _builder.Append(EncodingGuard(field, isString));
+
+	private string EncodingGuard(string field, bool isString)
+	{
+		var joined = JoinedValues(field, isString);
+
+		return $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{ValueSeparator}\", \"\"))) "
+			+ $"== COALESCE(MV_COUNT({field}), 0) + 1";
 	}
 
 	/// <summary>Escapes the characters Lucene regular expressions reserve.</summary>

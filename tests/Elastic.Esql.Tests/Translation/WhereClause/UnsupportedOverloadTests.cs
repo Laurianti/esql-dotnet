@@ -142,4 +142,19 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void ANullComparisonAgainstAProjectedValue_IsRefused()
+	{
+		// after a projection the parameter is the projected scalar, which has no field
+		// name of its own and may well be null
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.ClientIp)
+			.Where(ip => ip == null);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }

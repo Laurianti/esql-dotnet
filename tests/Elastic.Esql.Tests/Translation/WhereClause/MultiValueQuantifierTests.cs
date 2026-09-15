@@ -17,6 +17,19 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		$"COALESCE(CONCAT(\"{Sep}\", MV_CONCAT({field}, \"{Sep}\"), \"{Sep}\"), \"{Sep}\")";
 
 	/// <summary>
+	/// A negated predicate: the encoding guard stays outside the NOT, since a row whose
+	/// values collide with the separator has to be excluded either way.
+	/// </summary>
+	private static string Negated(string field, string pattern, string? counted = null)
+	{
+		var joined = Joined(field);
+		var separators = $"(LENGTH({joined}) - LENGTH(REPLACE({joined}, \"{Sep}\", \"\")))";
+
+		return $"({separators} == COALESCE(MV_COUNT({counted ?? field}), 0) + 1 "
+			+ $"AND NOT {joined} RLIKE \"\"\"{pattern}\"\"\")";
+	}
+
+	/// <summary>
 	/// The whole emitted predicate: the guard that catches a stored value holding the
 	/// separator, and then the pattern itself.
 	/// </summary>
@@ -101,7 +114,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Matching("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
+            | WHERE {{Negated("tags", $"({Sep}i[^{Sep}]*)*{Sep}")}}
             """".NativeLineEndings());
 	}
 
@@ -116,7 +129,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Matching("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
+            | WHERE {{Negated("tags", $".*{Sep}[^{Sep}]*at[^{Sep}]*{Sep}.*")}}
             """".NativeLineEndings());
 	}
 
@@ -163,7 +176,7 @@ public class MultiValueQuantifierTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$""""
             FROM products
-            | WHERE NOT {{Matching("tags", $"({Sep}wat[^{Sep}]*)*{Sep}")}}
+            | WHERE {{Negated("tags", $"({Sep}wat[^{Sep}]*)*{Sep}")}}
             """".NativeLineEndings());
 	}
 
