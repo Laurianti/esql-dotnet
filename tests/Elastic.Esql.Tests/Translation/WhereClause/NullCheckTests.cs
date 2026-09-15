@@ -113,4 +113,22 @@ public class NullCheckTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void AnIdentitySelect_LeavesTheDocumentRowInPlace()
+	{
+		// Select(l => l) emits nothing and hands the row back as it is, so the guard on
+		// the document parameter is still a constant afterwards
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l)
+			.Where(l => l != null)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE TRUE
+            """.NativeLineEndings());
+	}
 }
