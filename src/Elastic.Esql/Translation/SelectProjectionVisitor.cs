@@ -196,6 +196,14 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 	private void ClassifyProjectionMember(string resultField, Expression sourceExpression)
 	{
+		// A null-guarded nested projection, the shape a GraphQL layer emits for
+		// "parent { child }": param == null ? null : new Child { Field = param.Child.Field }
+		if (sourceExpression is ConditionalExpression guarded
+			&& TryUnwrapNullGuard(guarded, out var guardedBranch)
+			&& guardedBranch is MemberInitExpression or NewExpression
+			&& TryClassifyNestedProjection(resultField, guardedBranch))
+			return;
+
 		if (sourceExpression is UnaryExpression { NodeType: ExpressionType.Convert } unary && IsNullableCast(unary))
 		{
 			ClassifyProjectionMember(resultField, unary.Operand);
@@ -332,8 +340,10 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		var left = StripNullableConvert(test.Left);
 		var right = StripNullableConvert(test.Right);
 
-		if (!(left is ParameterExpression && IsNullConstant(right))
-			&& !(right is ParameterExpression && IsNullConstant(left)))
+		// the guarded side is either the lambda parameter itself, or a member path
+		// rooted in it: "param == null" and "param.Child == null" are both guards
+		if (!(IsParameterRooted(left) && IsNullConstant(right))
+			&& !(IsParameterRooted(right) && IsNullConstant(left)))
 			return false;
 
 		if (test.NodeType == ExpressionType.Equal)
@@ -353,6 +363,14 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 		return true;
 	}
+
+	/// <summary>An expression that is the lambda parameter, or a member path rooted in it.</summary>
+	private static bool IsParameterRooted(Expression expression) => expression switch
+	{
+		ParameterExpression => true,
+		MemberExpression member => member.Expression is not null && IsParameterRooted(member.Expression),
+		_ => false
+	};
 
 	private static bool IsSimpleFieldAccess(Expression expression)
 	{
