@@ -511,10 +511,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return result;
 	}
 
-	/// <summary>
-	/// "p != null" on the lambda parameter itself: the document is never null, and
-	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
-	/// </summary>
 	/// <summary>Whether the StringComparison argument asks for an ordinal ordering.</summary>
 	private static bool IsOrdinalComparison(Expression expression)
 	{
@@ -528,6 +524,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
+	/// <summary>
+	/// "p != null" on the lambda parameter itself: the document is never null, and
+	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
+	/// </summary>
 	private bool TryVisitRootNullGuard(BinaryExpression node)
 	{
 		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
