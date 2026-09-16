@@ -31,6 +31,54 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardedChildOfAGuardedChild_IsUnwrappedTwice()
+	{
+		// the shape a selection two levels deep takes: the inner guard is null whenever
+		// its path is, and its path goes through the outer one
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null
+					? null!
+					: new NestedSelectionHost
+					{
+						Name = l.Host.Name,
+						Geo = l.Host.Geo == null ? null! : new NestedSelectionGeo { City = l.Host.Geo.City }
+					}
+			})
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP host.name, host.geo.city
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AnInnerGuardOnAnUnrelatedPath_IsRefused()
+	{
+		// the inner child is null when Agent is missing, not when Host is: the outer
+		// guard cannot be folded away
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null
+					? null!
+					: new NestedSelectionHost
+					{
+						Geo = l.Agent == null ? null! : new NestedSelectionGeo { City = l.Host.Geo.City }
+					}
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void PlainNestedInit_StillWorks()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()

@@ -327,8 +327,12 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	/// or <c>param != null ? param.Field : null</c> where one side of the test is a
 	/// <see cref="ParameterExpression"/> compared to null, and one branch is null/default.
 	/// </summary>
-	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch)
+	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch) =>
+		TryUnwrapNullGuard(conditional, out nonNullBranch, out _);
+
+	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch, out Expression guardedPath)
 	{
+		guardedPath = null!;
 		nonNullBranch = null!;
 
 		if (conditional.Test is not BinaryExpression
@@ -348,6 +352,8 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 		if (guarded is null)
 			return false;
+
+		guardedPath = guarded;
 
 		// the branch the guard protects: the one that is not the null literal
 		var branch = test.NodeType == ExpressionType.Equal
@@ -375,7 +381,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	}
 
 	/// <summary>Whether every member path in the expression goes through <paramref name="path"/>.</summary>
-	private static bool ReadsThrough(Expression expression, Expression path)
+	private bool ReadsThrough(Expression expression, Expression path)
 	{
 		if (SameMemberPath(expression, path))
 			return true;
@@ -398,6 +404,12 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// argument has to read through the path
 			NewExpression construction => construction.Arguments.Count > 0
 				&& construction.Arguments.All(argument => ReadsThrough(argument, path)),
+			// a guarded child of this child, the shape a selection two levels deep takes:
+			// it is null whenever its own guarded path is, and that path goes through this
+			// one, so it reads through as well
+			ConditionalExpression nested => TryUnwrapNullGuard(nested, out _, out var nestedPath)
+				&& nestedPath is MemberExpression
+				&& ReadsThrough(nestedPath, path),
 			// a call reads through the path when its receiver or one of its arguments does,
 			// provided the function is null over a null input: every scalar function is,
 			// except the few that exist to answer null, which would give a missing parent
