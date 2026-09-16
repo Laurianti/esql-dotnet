@@ -314,8 +314,8 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	[Test]
 	public void AGuardOverAChildWithAConstructorArgument_IsRefused()
 	{
-		// the argument of the constructor is a member of the child as much as a binding
-		// is: a constant there would be a value for a document without the parent
+		// the nested projection emits the bindings alone, never the constructor's
+		// arguments, so a child that takes any is not unwrapped, whatever they read
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
 			.Select(l => new
@@ -326,6 +326,52 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AGuardOverAChildWithAConstructorArgumentReadThrough_IsRefusedAllTheSame()
+	{
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new
+			{
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag(l.Host.Name) { Name = l.Host.Name }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AGuardedScalar_IntoANonNullableMember_IsRefused()
+	{
+		// a guarded scalar is held to the same rule as a guarded child: with the guard
+		// dropped, a missing value comes back as the member's default, an empty string
+		// here, not as the guard's null
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new EagerNestedDocument { Message = l.Host == null ? null! : l.Host.Name });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
+	}
+
+	[Test]
+	public void AGuardedScalar_IntoAMemberThatCanHoldNull_IsUnwrapped()
+	{
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new { Value = l.Host == null ? null : l.Host.Name })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | RENAME host.name AS value
+            | KEEP value
+            """.NativeLineEndings());
 	}
 
 	[Test]

@@ -290,7 +290,18 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			&& TryUnwrapNullGuard(conditional, out var nonNullBranch)
 			&& IsSimpleFieldAccess(nonNullBranch))
 		{
-			ClassifyProjectionMember(resultField, nonNullBranch);
+			// the same as for a guarded child: with the guard dropped, a missing value
+			// comes back as the member's default, which is the guard's null only for a
+			// member that can hold it
+			if (!targetCanHoldNull)
+			{
+				throw new NotSupportedException(
+					$"A null guard around {targetName} cannot be translated: the member is not declared "
+					+ "nullable, so the null the guard produces for a missing value has no way to reach "
+					+ "the materialized row. Declare it nullable, without an initializer.");
+			}
+
+			ClassifyProjectionMember(resultField, nonNullBranch, targetCanHoldNull, targetName);
 		}
 		else if (sourceExpression is BinaryExpression or MethodCallExpression or ConditionalExpression or ConstantExpression)
 		{
@@ -422,12 +433,13 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// member would be emitted for a missing parent, where the source gives null,
 			// and a child made of constants alone has nothing that reads through at all.
 			// A binding that is not an assignment, such as a nested initializer without
-			// new, is not read into, so it does not read through either; and the arguments
-			// of the constructor, when it takes any, are members of the child as much as
-			// the bindings are.
+			// new, is not read into, so it does not read through either; and a constructor
+			// that takes arguments is not read into by the nested projection at all, which
+			// emits the bindings alone, so such a child is not unwrapped rather than
+			// unwrapped and then emitted without part of itself.
 			MemberInitExpression init => init.Bindings.Count > 0
-				&& init.Bindings.All(b => b is MemberAssignment assignment && ReadsThrough(assignment.Expression, path))
-				&& (init.NewExpression.Arguments.Count == 0 || ReadsThrough(init.NewExpression, path)),
+				&& init.NewExpression.Arguments.Count == 0
+				&& init.Bindings.All(b => b is MemberAssignment assignment && ReadsThrough(assignment.Expression, path)),
 			// the same for a child built with new, anonymous or by constructor: every
 			// argument has to read through the path
 			NewExpression construction => construction.Arguments.Count > 0
