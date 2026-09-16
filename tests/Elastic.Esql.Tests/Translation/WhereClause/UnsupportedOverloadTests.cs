@@ -416,7 +416,7 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*both be missing*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*two fields*");
 	}
 
 	[Test]

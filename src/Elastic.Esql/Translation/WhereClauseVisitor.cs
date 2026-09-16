@@ -589,9 +589,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// asked for, so they are refused with a pointer to the ordinal forms.
 	/// <para>
 	/// Even the ordinal forms are not identical to what Elasticsearch does: .NET compares
-	/// UTF-16 code units, Elasticsearch the UTF-8 bytes of a keyword, so a supplementary
-	/// character sorts before U+E000 in .NET and after it in Elasticsearch. They agree
-	/// over the Basic Multilingual Plane, which is where keys of this kind live.
+	/// UTF-16 code units, Elasticsearch the UTF-8 bytes of a keyword, and the two orders
+	/// disagree on exactly one kind of pair, a supplementary character against a character
+	/// in U+E000 to U+FFFF. A comparison is decided by the first character that differs,
+	/// so when the value compared against holds neither a supplementary character nor
+	/// one at or above U+E000, no such pair can arise, whatever the field holds, and the
+	/// translation is exact. Only that case is translated; a value outside it, or two
+	/// fields compared with each other, is refused rather than ordered wrongly.
 	/// </para>
 	/// </summary>
 	private bool TryVisitStringComparison(BinaryExpression node)
@@ -652,6 +656,30 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ "field with null directly, which ES|QL answers with IS NULL.");
 		}
 
+		// The UTF-16 and UTF-8 orders disagree only between a supplementary character
+		// and one in U+E000 to U+FFFF. With a value holding neither, the first differing
+		// character can never be such a pair, so the translation is exact for any field.
+		var value = TryGetConstant(first, out var firstValue) ? firstValue
+			: TryGetConstant(second, out var secondValue) ? secondValue
+			: null;
+
+		if (value is not string text)
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} between two fields is not supported: without a "
+				+ "value to look at, the translation cannot tell whether the UTF-16 ordering of .NET "
+				+ "and the UTF-8 ordering of Elasticsearch agree on the comparison.");
+		}
+
+		if (text.Any(character => char.IsSurrogate(character) || character >= '\uE000'))
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} against a value holding a character at or above "
+				+ "U+E000, or outside the Basic Multilingual Plane, is not supported: on such a value "
+				+ "the UTF-16 ordering of .NET and the UTF-8 ordering of Elasticsearch can disagree, "
+				+ "so the comparison is left untranslated rather than answered with the wrong order.");
+		}
+
 		var op = node.NodeType switch
 		{
 			ExpressionType.GreaterThan => flipped ? "<" : ">",
@@ -663,15 +691,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// .NET orders null before every string. A comparison against a missing field is
 		// null in ES|QL and drops the row, so a field that can be missing has its side of
 		// the ordering spelled out.
+		// one side is a value by now, so at most one side is a field that can be missing
 		var firstMayBeMissing = AsNullableField(first);
 		var secondMayBeMissing = AsNullableField(second);
-
-		if (firstMayBeMissing is not null && secondMayBeMissing is not null)
-		{
-			throw new NotSupportedException(
-				$"String method {call.Method.Name} between two fields that can both be missing "
-				+ "is not supported: the ordering of two absent values has no single ES|QL form.");
-		}
 
 		var descending = op[0] == '>';
 		var guardedField = firstMayBeMissing ?? secondMayBeMissing;

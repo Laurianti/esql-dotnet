@@ -153,20 +153,57 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareOrdinalWithANullableSecondField_GuardsThatField()
+	public void CompareOrdinalBetweenTwoFields_IsRefused()
 	{
-		// string.CompareOrdinal("m", null) is positive in .NET: the first operand is
-		// above a missing second one, so the missing value stays in for ">"
+		// without a value to look at, nothing says whether the UTF-16 and UTF-8 orderings
+		// agree on the comparison
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, l.ClientIp) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*two fields*");
+	}
+
+	[Test]
+	public void AValueAtOrAboveUE000_IsRefused()
+	{
+		// a fullwidth letter sits at U+FF21: against it a supplementary character in the
+		// field would sort one way in .NET and the other in Elasticsearch
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, "\uFF21") > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*U+E000*");
+	}
+
+	[Test]
+	public void ASupplementaryCharacterInTheValue_IsRefused()
+	{
+		var emoji = "\U0001F600";
+
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, emoji) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*U+E000*");
+	}
+
+	[Test]
+	public void AValueBelowUE000_IsTranslated()
+	{
+		// CJK and Cyrillic sit well below U+E000, where the two orderings agree
 		var esql = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => string.CompareOrdinal(l.Message, l.ClientIp) > 0)
+			.Where(l => string.CompareOrdinal(l.Message, "\u4E2D\u0416z") > 0)
 			.ToString();
 
-		_ = esql.Should().Be(
-			"""
-            FROM logs-*
-            | WHERE (clientIp IS NULL OR message > clientIp)
-            """.NativeLineEndings());
+		_ = esql.Should().Contain("message > ");
 	}
 
 	[Test]
