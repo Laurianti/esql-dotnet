@@ -31,6 +31,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(NestedSelectionDocument))]
 [JsonSerializable(typeof(EagerNestedDocument))]
 [JsonSerializable(typeof(SetTaggedProduct))]
+[JsonSerializable(typeof(OwnTaggedProduct))]
 [JsonSerializable(typeof(NestedHostLookup))]
 [JsonSerializable(typeof(DottedLevelLookup))]
 [JsonSerializable(typeof(BookDocument))]
@@ -594,6 +595,25 @@ public class SetTaggedProduct
 {
 	public string Name { get; set; } = string.Empty;
 	public HashSet<string> Tags { get; set; } = [];
+}
+
+/// <summary>A document whose tags are a collection type of its own, which may answer Contains any way.</summary>
+public class OwnTaggedProduct
+{
+	public string Name { get; set; } = string.Empty;
+	public OwnTags Tags { get; set; } = new();
+}
+
+/// <summary>A collection of the document's own: it happens to be a list, but its declared type says nothing of the kind.</summary>
+public class OwnTags : IEnumerable<string>
+{
+	private readonly List<string> _items = [];
+
+	public void Add(string item) => _items.Add(item);
+
+	public IEnumerator<string> GetEnumerator() => _items.GetEnumerator();
+
+	System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _items.GetEnumerator();
 }
 
 /// <summary>A document whose nested member is declared non-nullable, with an initializer.</summary>

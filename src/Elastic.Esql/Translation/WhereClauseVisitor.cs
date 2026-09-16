@@ -974,14 +974,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!IsFrameworkMethod(node.Method))
 			return false;
 
-		// a set carries its own comparer, which the document's declared type does not
-		// show, so a set-typed field is refused as a set-typed constant is
-		if (IsSetType(source.Type))
+		// only a field declared as a list or an array of a known kind: a set answers
+		// Contains by the comparer it was built with, which the declared type does not
+		// show, and a collection type of the document's own may answer it any way at all
+		if (!IsListType(source.Type))
 		{
 			throw new NotSupportedException(
-				$"A predicate over a field of type {TypeName(source.Type)} is not supported: a set answers "
-				+ "Contains by the comparer it was built with, which the translation cannot see. Declare "
-				+ "the field as a list or an array, which compare with default equality.");
+				$"A predicate over a field of type {TypeName(source.Type)} is not supported: only a field "
+				+ "declared as an array or a list of the base library is taken to compare with default "
+				+ "equality. A set answers Contains by the comparer it was built with, and a collection "
+				+ "type of your own may answer it in any way, neither of which the translation can see.");
 		}
 
 		// field.Any() with no predicate: the field simply has to hold a value
@@ -1499,24 +1501,29 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			|| declaring.Assembly.GetName().Name is "System.Collections" or "System.Collections.Immutable";
 	}
 
-	/// <summary>A set of any kind, by its declared type: it carries a comparer of its own.</summary>
-	private static bool IsSetType(Type type)
+	/// <summary>
+	/// A field declared as an array, or as a list of the base library, by its declared
+	/// type: the kinds known to compare with default equality, as the captured
+	/// collections are held to the kinds known to.
+	/// </summary>
+	private static bool IsListType(Type type)
 	{
-		for (var current = type; current is not null; current = current.BaseType)
-		{
-			if (!current.IsGenericType)
-				continue;
+		if (type.IsArray)
+			return true;
 
-			var name = current.GetGenericTypeDefinition().FullName;
+		if (!type.IsGenericType)
+			return false;
 
-			if (name is "System.Collections.Generic.HashSet`1" or "System.Collections.Generic.SortedSet`1"
-				or "System.Collections.Generic.ISet`1" or "System.Collections.Generic.IReadOnlySet`1"
-				or "System.Collections.Immutable.ImmutableHashSet`1" or "System.Collections.Immutable.ImmutableSortedSet`1"
-				or "System.Collections.Frozen.FrozenSet`1")
-				return true;
-		}
+		var definition = type.GetGenericTypeDefinition();
 
-		return false;
+		return definition == typeof(List<>)
+			|| definition == typeof(IList<>)
+			|| definition == typeof(IReadOnlyList<>)
+			|| definition == typeof(ICollection<>)
+			|| definition == typeof(IReadOnlyCollection<>)
+			|| definition == typeof(IEnumerable<>)
+			|| definition.FullName is "System.Collections.Immutable.ImmutableArray`1"
+				or "System.Collections.Immutable.ImmutableList`1";
 	}
 
 	private static bool ContainsParameter(Expression expression) => expression switch

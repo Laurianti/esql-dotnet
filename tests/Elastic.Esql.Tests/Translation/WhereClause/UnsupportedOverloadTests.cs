@@ -273,6 +273,20 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AFieldOfACollectionTypeOfItsOwn_IsRefused()
+	{
+		// the declared type says nothing about how the collection answers Contains, so
+		// only an array or a list of the base library is taken
+		var query = CreateQuery<OwnTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*collection type of your own*");
+	}
+
+	[Test]
 	public void AnAnyOfTheCallersOwn_IsNotTakenForTheFrameworkOne()
 	{
 		// a method named Any that is not Enumerable.Any may mean anything: it is left to
