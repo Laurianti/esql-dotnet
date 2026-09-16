@@ -332,13 +332,6 @@ public class NestedSelectionGeo
 	public string City { get; set; } = string.Empty;
 }
 
-/// <summary>A nested child whose constructor takes a value, for the guard over a constructor argument.</summary>
-public class NestedSelectionHostWithTag(string tag)
-{
-	public string Tag { get; } = tag;
-	public string Name { get; set; } = string.Empty;
-}
-
 // ============================================================================
 // MATERIALIZATION TEST MODELS: used by deserialization edge-case tests
 // ============================================================================
@@ -584,5 +577,12 @@ public class FlatDotFallbackModel
 	[JsonPropertyName("unknown.prop")]
 	public string UnknownProp { get; set; } = string.Empty;
 
+	public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>A nested child whose constructor takes a value, for the guard over a constructor argument.</summary>
+public class NestedSelectionHostWithTag(string tag)
+{
+	public string Tag { get; } = tag;
 	public string Name { get; set; } = string.Empty;
 }
