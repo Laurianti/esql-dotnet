@@ -639,6 +639,29 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
+	public void ALimitAboveWhatElasticsearchParses_IsRefusedWhenStated()
+	{
+		// each position adds a level to the expression, and Elasticsearch parses 400
+		var query = CreateQuery<TaggedProduct>().From("products");
+
+		var act = () => query.MultiValueLimit(EsqlQueryableExtensions.MaxMultiValueLimit + 1);
+
+		_ = act.Should().Throw<ArgumentOutOfRangeException>();
+	}
+
+	[Test]
+	public void TheLargestLimit_IsAccepted()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(EsqlQueryableExtensions.MaxMultiValueLimit)
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat")))
+			.ToString();
+
+		_ = esql.Should().Contain($"CASE(MV_COUNT(tags) > {EsqlQueryableExtensions.MaxMultiValueLimit}, NULL,");
+	}
+
+	[Test]
 	public void ALimitBelowOne_IsRefusedWhenStated()
 	{
 		var query = CreateQuery<TaggedProduct>().From("products");
