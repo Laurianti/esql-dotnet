@@ -742,6 +742,36 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// trimmer's way.
 	/// </para>
 	/// </summary>
+	/// <summary>
+	/// Whether a constructor parameter is declared as a nullable reference, read the same
+	/// way: its own attribute, then the context of the constructor and its declaring types.
+	/// </summary>
+	internal static bool IsDeclaredNullable(ParameterInfo parameter)
+	{
+		if (parameter.ParameterType.IsValueType)
+			return false;
+
+		var own = NullableFlag(parameter.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
+
+		if (own is not null)
+			return own == 2;
+
+		var context = NullableFlag(parameter.Member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+		if (context is not null)
+			return context == 2;
+
+		for (var declaring = parameter.Member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
+		{
+			context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+			if (context is not null)
+				return context == 2;
+		}
+
+		return false;
+	}
+
 	internal static bool IsDeclaredNullable(MemberInfo member)
 	{
 		var type = member switch

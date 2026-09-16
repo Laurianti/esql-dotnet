@@ -32,6 +32,8 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(EagerNestedDocument))]
 [JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(OwnTaggedProduct))]
+[JsonSerializable(typeof(EagerHostRecord))]
+[JsonSerializable(typeof(LazyHostRecord))]
 [JsonSerializable(typeof(NestedHostLookup))]
 [JsonSerializable(typeof(DottedLevelLookup))]
 [JsonSerializable(typeof(BookDocument))]
@@ -622,3 +624,9 @@ public class EagerNestedDocument
 	public string Message { get; set; } = string.Empty;
 	public NestedSelectionHost Host { get; set; } = new();
 }
+
+/// <summary>A record whose constructor takes the nested child as non-nullable: it cannot hold a guard's null.</summary>
+public record EagerHostRecord(NestedSelectionHost Host);
+
+/// <summary>The same record with the child declared nullable, where a guard's null has a place to go.</summary>
+public record LazyHostRecord(NestedSelectionHost? Host);

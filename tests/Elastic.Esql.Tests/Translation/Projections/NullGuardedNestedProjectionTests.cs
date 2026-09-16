@@ -97,6 +97,31 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardIntoANonNullableConstructorParameter_IsRefused()
+	{
+		// the constructor's parameter stands for the member: declared non-nullable, it
+		// cannot hold the null the guard produces
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new EagerHostRecord(l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name }));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
+	}
+
+	[Test]
+	public void AGuardIntoANullableConstructorParameter_IsUnwrapped()
+	{
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new LazyHostRecord(l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }))
+			.ToString();
+
+		_ = esql.Should().Contain("host.name");
+	}
+
+	[Test]
 	public void PlainNestedInit_StillWorks()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()

@@ -127,7 +127,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 				var resultField = _context.ResolveFieldName(declaringType, member);
 				_ = anonymousFieldNames?.Add(resultField);
 
-				ClassifyProjectionMember(resultField, arg, member);
+				ClassifyProjectionMember(resultField, arg, CanHoldNull(member), member.Name);
 			}
 
 			if (anonymousFieldNames is not null)
@@ -154,7 +154,9 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 					"does not match any serializable property. " +
 					"Ensure each parameter name matches a property name (case-insensitive).");
 
-			ClassifyProjectionMember(jsonProp.Name, node.Arguments[i]);
+			// the constructor's parameter is the member here: its own nullability says
+			// whether the null a dropped guard produces can reach the row
+			ClassifyProjectionMember(jsonProp.Name, node.Arguments[i], CanHoldNull(parameters[i]), paramName);
 		}
 
 		return node;
@@ -168,7 +170,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var declaringType = assignment.Member.DeclaringType ?? node.Type;
 				var resultField = _context.ResolveFieldName(declaringType, assignment.Member);
-				ClassifyProjectionMember(resultField, assignment.Expression, assignment.Member);
+				ClassifyProjectionMember(resultField, assignment.Expression, CanHoldNull(assignment.Member), assignment.Member.Name);
 			}
 		}
 
@@ -194,7 +196,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		return node;
 	}
 
-	private void ClassifyProjectionMember(string resultField, Expression sourceExpression, MemberInfo? target = null)
+	private void ClassifyProjectionMember(string resultField, Expression sourceExpression, bool targetCanHoldNull = true, string? targetName = null)
 	{
 		// A null-guarded nested projection, the shape a GraphQL layer emits for
 		// "parent { child }": param == null ? null : new Child { Field = param.Child.Field }
@@ -206,10 +208,10 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// parent comes back as whatever the member holds by default, which is null
 			// only for a member declared nullable. Anywhere else the null the guard
 			// produces has no way to reach the row, so the shape is refused.
-			if (target is not null && !CanHoldNull(target))
+			if (!targetCanHoldNull)
 			{
 				throw new NotSupportedException(
-					$"A null guard around {target.Name} cannot be translated: the member is not declared "
+					$"A null guard around {targetName} cannot be translated: the member is not declared "
 					+ "nullable, so the null the guard produces for a missing parent has no way to reach "
 					+ "the materialized row. Declare it nullable, without an initializer.");
 			}
@@ -306,7 +308,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var member = newExpression.Members[i];
 				var nestedResultField = BuildNestedResultField(resultField, member, newExpression.Type);
-				ClassifyProjectionMember(nestedResultField, newExpression.Arguments[i], newExpression.Members[i]);
+				ClassifyProjectionMember(nestedResultField, newExpression.Arguments[i], CanHoldNull(newExpression.Members[i]), newExpression.Members[i].Name);
 			}
 
 			return true;
@@ -320,7 +322,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 					continue;
 
 				var nestedResultField = BuildNestedResultField(resultField, assignment.Member, memberInitExpression.Type);
-				ClassifyProjectionMember(nestedResultField, assignment.Expression, assignment.Member);
+				ClassifyProjectionMember(nestedResultField, assignment.Expression, CanHoldNull(assignment.Member), assignment.Member.Name);
 			}
 
 			return true;
@@ -402,6 +404,9 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	private static bool CanHoldNull(MemberInfo member) =>
 		(member.DeclaringType is { } declaring && declaring.IsDefined(typeof(CompilerGeneratedAttribute), false))
 		|| WhereClauseVisitor.IsDeclaredNullable(member);
+
+	/// <summary>The same for a constructor parameter, which stands for the member it initializes.</summary>
+	private static bool CanHoldNull(ParameterInfo parameter) => WhereClauseVisitor.IsDeclaredNullable(parameter);
 
 	/// <summary>Whether every member path in the expression goes through <paramref name="path"/>.</summary>
 	private bool ReadsThrough(Expression expression, Expression path)
