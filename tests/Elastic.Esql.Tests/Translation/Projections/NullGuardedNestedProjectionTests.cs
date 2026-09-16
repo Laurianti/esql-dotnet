@@ -131,6 +131,23 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAChildWithAConstructorArgument_IsRefused()
+	{
+		// the argument of the constructor is a member of the child as much as a binding
+		// is: a constant there would be a value for a document without the parent
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new
+			{
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag("constant") { Name = l.Host.Name }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAChildWithANestedInitializer_IsRefused()
 	{
 		// "Geo = { City = ... }" is a binding that is not an assignment: nothing is read
