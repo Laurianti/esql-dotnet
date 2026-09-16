@@ -387,6 +387,10 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			MemberInitExpression init => init.Bindings.OfType<MemberAssignment>() is var bindings
 				&& bindings.Any()
 				&& bindings.All(b => ReadsThrough(b.Expression, path)),
+			// the same for a child built with new, anonymous or by constructor: every
+			// argument has to read through the path
+			NewExpression construction => construction.Arguments.Count > 0
+				&& construction.Arguments.All(argument => ReadsThrough(argument, path)),
 			// a call reads through the path when its receiver or one of its arguments does,
 			// provided the function is null over a null input: every scalar function is,
 			// except the few that exist to answer null, which would give a missing parent

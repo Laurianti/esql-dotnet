@@ -102,6 +102,35 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAnAnonymousChild_IsUnwrapped()
+	{
+		// an anonymous child is built with new rather than an initializer: its arguments
+		// are what has to read through the guarded path
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new { Host = l.Host == null ? null : new { l.Host.Name } })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP host.name
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AGuardOverAnAnonymousChildWithAConstant_IsRefused()
+	{
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new { Host = l.Host == null ? null : new { l.Host.Name, Label = "constant" } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAChildWithAConstantMember_IsRefused()
 	{
 		// one member reads through Host, the other is a constant: for a document with
