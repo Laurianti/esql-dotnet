@@ -586,3 +586,17 @@ public class NestedSelectionHostWithTag(string tag)
 	public string Tag { get; } = tag;
 	public string Name { get; set; } = string.Empty;
 }
+
+/// <summary>A document whose tags are a set: a set answers Contains by its own comparer.</summary>
+public class SetTaggedProduct
+{
+	public string Name { get; set; } = string.Empty;
+	public HashSet<string> Tags { get; set; } = [];
+}
+
+/// <summary>A document whose nested member is declared non-nullable, with an initializer.</summary>
+public class EagerNestedDocument
+{
+	public string Message { get; set; } = string.Empty;
+	public NestedSelectionHost Host { get; set; } = new();
+}

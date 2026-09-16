@@ -259,6 +259,34 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
+	public void ASetTypedField_IsRefused()
+	{
+		// the field's declared type is a set: it answers Contains by a comparer the
+		// translation cannot see, so it is refused like a set-typed constant
+		var query = CreateQuery<SetTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*set answers Contains*");
+	}
+
+	[Test]
+	public void AnAnyOfTheCallersOwn_IsNotTakenForTheFrameworkOne()
+	{
+		// a method named Any that is not Enumerable.Any may mean anything: it is left to
+		// fail soft rather than translated as the framework's
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => OwnMethods.OwnQueries.Any(p.Tags, t => t == "iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not supported*");
+	}
+
+	[Test]
 	public void AFrozenSetWithItsOwnComparer_IsRefused()
 	{
 		// a set of any kind carries its own comparer, not only the ones known by name

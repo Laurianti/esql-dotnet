@@ -947,6 +947,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is null || !IsMultiValueField(source))
 			return false;
 
+		// only the framework's own Any, All and Contains: a method of that name defined
+		// elsewhere may mean anything, and is left to fail soft as before
+		if (!IsFrameworkMethod(node.Method))
+			return false;
+
+		// a set carries its own comparer, which the document's declared type does not
+		// show, so a set-typed field is refused as a set-typed constant is
+		if (IsSetType(source.Type))
+		{
+			throw new NotSupportedException(
+				$"A predicate over a field of type {TypeName(source.Type)} is not supported: a set answers "
+				+ "Contains by the comparer it was built with, which the translation cannot see. Declare "
+				+ "the field as a list or an array, which compare with default equality.");
+		}
+
 		// field.Any() with no predicate: the field simply has to hold a value
 		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
 		{
@@ -1443,6 +1458,44 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>A collection-typed member of the document, as opposed to a captured constant.</summary>
 	private static bool IsMultiValueField(Expression expression) =>
 		IsEnumerableType(expression.Type) && ContainsParameter(expression);
+
+	/// <summary>
+	/// Whether the method is the framework's own: Enumerable and MemoryExtensions for the
+	/// static forms, the collections of the base library for the instance ones.
+	/// </summary>
+	private static bool IsFrameworkMethod(MethodInfo method)
+	{
+		var declaring = method.DeclaringType;
+
+		if (declaring is null)
+			return false;
+
+		if (method.IsStatic)
+			return declaring == typeof(Enumerable) || declaring == typeof(MemoryExtensions);
+
+		return declaring.Assembly == typeof(object).Assembly
+			|| declaring.Assembly.GetName().Name is "System.Collections" or "System.Collections.Immutable";
+	}
+
+	/// <summary>A set of any kind, by its declared type: it carries a comparer of its own.</summary>
+	private static bool IsSetType(Type type)
+	{
+		for (var current = type; current is not null; current = current.BaseType)
+		{
+			if (!current.IsGenericType)
+				continue;
+
+			var name = current.GetGenericTypeDefinition().FullName;
+
+			if (name is "System.Collections.Generic.HashSet`1" or "System.Collections.Generic.SortedSet`1"
+				or "System.Collections.Generic.ISet`1" or "System.Collections.Generic.IReadOnlySet`1"
+				or "System.Collections.Immutable.ImmutableHashSet`1" or "System.Collections.Immutable.ImmutableSortedSet`1"
+				or "System.Collections.Frozen.FrozenSet`1")
+				return true;
+		}
+
+		return false;
+	}
 
 	private static bool ContainsParameter(Expression expression) => expression switch
 	{
