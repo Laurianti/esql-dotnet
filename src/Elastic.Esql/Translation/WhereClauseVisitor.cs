@@ -922,7 +922,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Equality here is the store's: the field is compared the way Elasticsearch compares
 	/// its values. The property's collection type is how a document is materialized, and
 	/// a comparer set on an instance is not visible when the query is translated, just as
-	/// a scalar comparison on a string property does not see one either.
+	/// a scalar comparison on a string property does not see one either. MATCH compares
+	/// the way the field is indexed: exactly on a keyword field, through the analyzer on
+	/// a text field, as MATCH always does; a keyword multi-field of a collection is not a
+	/// shape translated here.
 	/// </para>
 	/// </summary>
 	private bool TryVisitMultiValueField(MethodCallExpression node)
