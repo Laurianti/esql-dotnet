@@ -1263,17 +1263,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// A LIKE pattern built around a value: a query parameter when the value came from a
-	/// captured variable, so the pattern is not embedded in the query text either.
+	/// A LIKE pattern of an element predicate, always as a literal: ES|QL takes a
+	/// literal after LIKE and rejects a parameter there, where a function argument
+	/// such as the prefix of STARTS_WITH may be one.
 	/// </summary>
-	private string RenderPattern(ElementPredicate predicate, int index, string pattern)
-	{
-		var name = predicate.Names is { } names && index < names.Count ? names[index] : null;
-
-		return name is null
-			? EsqlFormatting.FormatString(pattern)
-			: _context.GetValueOrParameterName(name, pattern);
-	}
+	private static string RenderPattern(string pattern) => EsqlFormatting.FormatString(pattern);
 
 	/// <summary>
 	/// A value of an element predicate, as a query parameter when it came from a
@@ -1344,7 +1338,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// TO_STRING, so its values are rendered as text rather than in their own type.
 		var rendered = values
 			.Select((value, index) => predicate.Kind == ElementPredicateKind.Contains
-				? RenderPattern(predicate, index, "*" + EscapeLikeMetacharacters(value) + "*")
+				? RenderPattern("*" + EscapeLikeMetacharacters(value) + "*")
 				: isString
 					? RenderValue(predicate, index)
 					: EsqlFormatting.FormatString(value))

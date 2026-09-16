@@ -518,8 +518,10 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
-	public void ACapturedContainsPattern_BecomesAParameter()
+	public void ACapturedContainsPattern_StaysInline()
 	{
+		// ES|QL takes a literal after LIKE and rejects a parameter there, unlike a
+		// function argument; the captured value is escaped into the pattern instead
 		var fragment = "ate";
 
 		var esql = CreateQuery<TaggedProduct>()
@@ -528,8 +530,8 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.Where(p => p.Tags.Any(t => t.Contains(fragment)))
 			.ToEsqlString(inlineParameters: false);
 
-		_ = esql.Should().Contain("LIKE ?fragment");
-		_ = esql.Should().NotContain("*ate*");
+		_ = esql.Should().Contain("LIKE \"*ate*\"");
+		_ = esql.Should().NotContain("?fragment");
 	}
 
 	[Test]
