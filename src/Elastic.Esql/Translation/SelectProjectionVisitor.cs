@@ -127,7 +127,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 				var resultField = _context.ResolveFieldName(declaringType, member);
 				_ = anonymousFieldNames?.Add(resultField);
 
-				ClassifyProjectionMember(resultField, arg);
+				ClassifyProjectionMember(resultField, arg, member);
 			}
 
 			if (anonymousFieldNames is not null)
@@ -168,7 +168,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var declaringType = assignment.Member.DeclaringType ?? node.Type;
 				var resultField = _context.ResolveFieldName(declaringType, assignment.Member);
-				ClassifyProjectionMember(resultField, assignment.Expression);
+				ClassifyProjectionMember(resultField, assignment.Expression, assignment.Member);
 			}
 		}
 
@@ -194,15 +194,29 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		return node;
 	}
 
-	private void ClassifyProjectionMember(string resultField, Expression sourceExpression)
+	private void ClassifyProjectionMember(string resultField, Expression sourceExpression, MemberInfo? target = null)
 	{
 		// A null-guarded nested projection, the shape a GraphQL layer emits for
 		// "parent { child }": param == null ? null : new Child { Field = param.Child.Field }
 		if (sourceExpression is ConditionalExpression guarded
 			&& TryUnwrapNullGuard(guarded, out var guardedBranch)
-			&& guardedBranch is MemberInitExpression or NewExpression
-			&& TryClassifyNestedProjection(resultField, guardedBranch))
-			return;
+			&& guardedBranch is MemberInitExpression or NewExpression)
+		{
+			// Dropping the guard leaves no column to say the child is missing: a missing
+			// parent comes back as whatever the member holds by default, which is null
+			// only for a member declared nullable. Anywhere else the null the guard
+			// produces has no way to reach the row, so the shape is refused.
+			if (target is not null && !CanHoldNull(target))
+			{
+				throw new NotSupportedException(
+					$"A null guard around {target.Name} cannot be translated: the member is not declared "
+					+ "nullable, so the null the guard produces for a missing parent has no way to reach "
+					+ "the materialized row. Declare it nullable, without an initializer.");
+			}
+
+			if (TryClassifyNestedProjection(resultField, guardedBranch))
+				return;
+		}
 
 		if (sourceExpression is UnaryExpression { NodeType: ExpressionType.Convert } unary && IsNullableCast(unary))
 		{
@@ -292,7 +306,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var member = newExpression.Members[i];
 				var nestedResultField = BuildNestedResultField(resultField, member, newExpression.Type);
-				ClassifyProjectionMember(nestedResultField, newExpression.Arguments[i]);
+				ClassifyProjectionMember(nestedResultField, newExpression.Arguments[i], newExpression.Members[i]);
 			}
 
 			return true;
@@ -306,7 +320,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 					continue;
 
 				var nestedResultField = BuildNestedResultField(resultField, assignment.Member, memberInitExpression.Type);
-				ClassifyProjectionMember(nestedResultField, assignment.Expression);
+				ClassifyProjectionMember(nestedResultField, assignment.Expression, assignment.Member);
 			}
 
 			return true;
@@ -379,6 +393,15 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		nonNullBranch = branch;
 		return true;
 	}
+
+	/// <summary>
+	/// Whether a member can hold the null a dropped guard produces: one declared as a
+	/// nullable reference, or one of an anonymous type, which has no initializer to
+	/// keep. A member declared non-nullable would come back as its default instead.
+	/// </summary>
+	private static bool CanHoldNull(MemberInfo member) =>
+		(member.DeclaringType is { } declaring && declaring.IsDefined(typeof(CompilerGeneratedAttribute), false))
+		|| WhereClauseVisitor.IsDeclaredNullable(member);
 
 	/// <summary>Whether every member path in the expression goes through <paramref name="path"/>.</summary>
 	private bool ReadsThrough(Expression expression, Expression path)

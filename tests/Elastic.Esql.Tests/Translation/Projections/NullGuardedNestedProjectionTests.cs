@@ -19,7 +19,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }
 			})
 			.ToString();
 
@@ -40,11 +40,11 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.Select(l => new NestedSelectionDocument
 			{
 				Host = l.Host == null
-					? null!
+					? null
 					: new NestedSelectionHost
 					{
 						Name = l.Host.Name,
-						Geo = l.Host.Geo == null ? null! : new NestedSelectionGeo { City = l.Host.Geo.City }
+						Geo = l.Host.Geo == null ? null : new NestedSelectionGeo { City = l.Host.Geo.City }
 					}
 			})
 			.ToString();
@@ -66,16 +66,34 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.Select(l => new NestedSelectionDocument
 			{
 				Host = l.Host == null
-					? null!
+					? null
 					: new NestedSelectionHost
 					{
-						Geo = l.Agent == null ? null! : new NestedSelectionGeo { City = l.Host.Geo.City }
+						Geo = l.Agent == null ? null : new NestedSelectionGeo { City = l.Host.Geo.City }
 					}
 			});
 
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AGuardIntoANonNullableMember_IsRefused()
+	{
+		// with the guard dropped, a missing parent comes back as the member's default,
+		// which for a member with an initializer is an object rather than the null the
+		// guard produces: there is no way to carry that null, so the shape is refused
+		var query = CreateQuery<EagerNestedDocument>()
+			.From("logs-*")
+			.Select(l => new EagerNestedDocument
+			{
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
 	}
 
 	[Test]
@@ -120,7 +138,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = EsqlFunctions.Trim(l.Host.Name) }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = EsqlFunctions.Trim(l.Host.Name) }
 			})
 			.ToString();
 
@@ -141,7 +159,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = EsqlFunctions.Coalesce(l.Host.Name, "x") }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = EsqlFunctions.Coalesce(l.Host.Name, "x") }
 			});
 
 		var act = () => query.ToString();
@@ -258,7 +276,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name, Geo = { City = "constant" } }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name, Geo = { City = "constant" } }
 			});
 
 		var act = () => query.ToString();
@@ -277,7 +295,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.Select(l => new NestedSelectionDocument
 			{
 				Host = l.Host == null
-					? null!
+					? null
 					: new NestedSelectionHost { Name = "constant", Geo = new NestedSelectionGeo { City = l.Host.Geo.City } }
 			});
 
@@ -295,7 +313,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = "constant" }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = "constant" }
 			});
 
 		var act = () => query.ToString();

@@ -29,6 +29,8 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(UnmatchedCtorProjection))]
 [JsonSerializable(typeof(CollisionRecord))]
 [JsonSerializable(typeof(NestedSelectionDocument))]
+[JsonSerializable(typeof(EagerNestedDocument))]
+[JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(NestedHostLookup))]
 [JsonSerializable(typeof(DottedLevelLookup))]
 [JsonSerializable(typeof(BookDocument))]
@@ -312,14 +314,14 @@ public record CollisionRecord(string OuterMsg, string InnerMsg);
 public class NestedSelectionDocument
 {
 	public string Message { get; set; } = string.Empty;
-	public NestedSelectionHost Host { get; set; } = new();
-	public NestedSelectionAgent Agent { get; set; } = new();
+	public NestedSelectionHost? Host { get; set; }
+	public NestedSelectionAgent? Agent { get; set; }
 }
 
 public class NestedSelectionHost
 {
 	public string Name { get; set; } = string.Empty;
-	public NestedSelectionGeo Geo { get; set; } = new();
+	public NestedSelectionGeo? Geo { get; set; }
 }
 
 public class NestedSelectionAgent

@@ -720,7 +720,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// trimmer's way.
 	/// </para>
 	/// </summary>
-	private static bool IsDeclaredNullable(MemberInfo member)
+	internal static bool IsDeclaredNullable(MemberInfo member)
 	{
 		var type = member switch
 		{
