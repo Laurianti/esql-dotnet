@@ -444,10 +444,18 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// a value
 			MethodCallExpression call => EsqlFunctionTranslator.PropagatesNull(call)
 				&& ((call.Object is not null && ReadsThrough(call.Object, path))
-					|| call.Arguments.Any(argument => ReadsThrough(argument, path))),
+					|| call.Arguments.Any(argument => ReadsThrough(argument, path) || ReadsThroughParams(argument, path))),
 			_ => false
 		};
 	}
+
+	/// <summary>
+	/// The values of a params argument arrive in an array of their own, as in
+	/// Concat(a, b): one of them reading through the path is enough, the function being
+	/// null over a null input like any other.
+	/// </summary>
+	private bool ReadsThroughParams(Expression argument, Expression path) =>
+		argument is NewArrayExpression array && array.Expressions.Any(element => ReadsThrough(element, path));
 
 	private static bool SameMemberPath(Expression left, Expression right) => (left, right) switch
 	{

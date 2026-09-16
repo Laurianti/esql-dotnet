@@ -176,6 +176,42 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAParamsFunctionOfTheGuardedPath_IsUnwrapped()
+	{
+		// the values of a params call sit in an array of their own; CONCAT is null over a
+		// null input like any other function, so the guard can go
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = EsqlFunctions.Concat(l.Host.Name, "x") }
+			})
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL host.name = CONCAT(host.name, "x")
+            | KEEP host.name
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void AGuardOverAParamsFunctionOfConstantsOnly_IsRefused()
+	{
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = EsqlFunctions.Concat("a", "b") }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAFunctionThatAnswersNull_IsRefused()
 	{
 		// COALESCE gives a missing value a value of its own, so for a document with no
