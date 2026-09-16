@@ -691,9 +691,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// .NET orders null before every string. A comparison against a missing field is
 		// null in ES|QL and drops the row, so a field that can be missing has its side of
 		// the ordering spelled out.
-		// one side is a value by now, so at most one side is a field that can be missing
+		// one side is a value by now, so at most one side is a field that can be missing.
+		// Its ordering can be spelled out for the field itself, not for an expression of
+		// it, whose value for a missing field is not the field's null.
 		var firstMayBeMissing = AsNullableField(first);
 		var secondMayBeMissing = AsNullableField(second);
+
+		if ((firstMayBeMissing is null && ReadsANullableField(first)) || (secondMayBeMissing is null && ReadsANullableField(second)))
+		{
+			throw new NotSupportedException(
+				$"String method {call.Method.Name} over an expression of a field that can be missing is "
+				+ "not supported: the ordering of a missing value can be spelled out for the field "
+				+ "itself, not for an expression of it. Compare the field directly.");
+		}
 
 		var descending = op[0] == '>';
 		var guardedField = firstMayBeMissing ?? secondMayBeMissing;
@@ -729,6 +739,27 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	private static bool IsNullableFieldMember(MemberExpression member) =>
 		ExpressionTranslationHelpers.IsRootedInParameter(member) && IsDeclaredNullable(member.Member);
+
+	/// <summary>Whether any member read anywhere in the expression is a field that can be missing.</summary>
+	private static bool ReadsANullableField(Expression expression)
+	{
+		var finder = new NullableFieldFinder();
+		_ = finder.Visit(expression);
+		return finder.Found;
+	}
+
+	private sealed class NullableFieldFinder : ExpressionVisitor
+	{
+		public bool Found { get; private set; }
+
+		protected override Expression VisitMember(MemberExpression node)
+		{
+			if (IsNullableFieldMember(node))
+				Found = true;
+
+			return base.VisitMember(node);
+		}
+	}
 
 	/// <summary>
 	/// Whether the member is declared as a nullable reference. Only then is the guard

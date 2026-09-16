@@ -195,6 +195,31 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AnExpressionOfANullableField_IsRefused()
+	{
+		// the guard can spell out the ordering of a missing field, not of a function of
+		// it, whose value for a missing field is not the field's null
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(EsqlFunctions.Trim(l.ClientIp), "m", StringComparison.Ordinal) < 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*expression of a field*");
+	}
+
+	[Test]
+	public void AnExpressionOfANonNullableField_IsStillTranslated()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(EsqlFunctions.Trim(l.Message), "m", StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Contain("TRIM(message) < ");
+	}
+
+	[Test]
 	public void AValueBelowUE000_IsTranslated()
 	{
 		// CJK and Cyrillic sit well below U+E000, where the two orderings agree
