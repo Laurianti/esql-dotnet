@@ -273,6 +273,31 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
+	public void ContainsOverAnInterfaceTypedField_IsRefused()
+	{
+		// the interface says nothing about the collection behind the field, which is what
+		// answers Contains; Any compares the elements themselves and is the shape to use
+		var query = CreateQuery<InterfaceTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any(t => t == value)*");
+	}
+
+	[Test]
+	public void AnyOverAnInterfaceTypedField_IsStillTranslated()
+	{
+		var esql = CreateQuery<InterfaceTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot"))
+			.ToString();
+
+		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
+	}
+
+	[Test]
 	public void AFieldOfACollectionTypeOfItsOwn_IsRefused()
 	{
 		// the declared type says nothing about how the collection answers Contains, so

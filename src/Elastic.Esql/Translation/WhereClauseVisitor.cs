@@ -1060,6 +1060,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// for a comparison the translation cannot honour
 		if (methodName == "Contains")
 		{
+			// field.Contains(x) is answered by the collection behind the field, and an
+			// interface says nothing about which; Any(t => t == x) compares the elements
+			// themselves, whatever holds them, so it is the shape to use there
+			if (source.Type.IsInterface)
+			{
+				throw new NotSupportedException(
+					$"Contains over a field of type {TypeName(source.Type)} is not supported: an interface "
+					+ "does not say how the collection behind it answers Contains. Use "
+					+ "Any(t => t == value), which compares the elements themselves.");
+			}
+
 			var expectedArguments = node.Method.IsStatic ? 2 : 1;
 
 			return node.Arguments.Count == expectedArguments

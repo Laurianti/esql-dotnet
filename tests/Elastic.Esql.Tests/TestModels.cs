@@ -2,6 +2,7 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -32,6 +33,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(EagerNestedDocument))]
 [JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(OwnTaggedProduct))]
+[JsonSerializable(typeof(InterfaceTaggedProduct))]
 [JsonSerializable(typeof(EagerHostRecord))]
 [JsonSerializable(typeof(LazyHostRecord))]
 [JsonSerializable(typeof(NestedHostLookup))]
@@ -599,6 +601,13 @@ public class SetTaggedProduct
 	public HashSet<string> Tags { get; set; } = [];
 }
 
+/// <summary>A document whose tags are declared through an interface, which says nothing about the collection behind it.</summary>
+public class InterfaceTaggedProduct
+{
+	public string Name { get; set; } = string.Empty;
+	public IList<string> Tags { get; set; } = [];
+}
+
 /// <summary>A document whose tags are a collection type of its own, which may answer Contains any way.</summary>
 public class OwnTaggedProduct
 {
@@ -615,7 +624,7 @@ public class OwnTags : IEnumerable<string>
 
 	public IEnumerator<string> GetEnumerator() => _items.GetEnumerator();
 
-	System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _items.GetEnumerator();
+	IEnumerator IEnumerable.GetEnumerator() => _items.GetEnumerator();
 }
 
 /// <summary>A document whose nested member is declared non-nullable, with an initializer.</summary>
