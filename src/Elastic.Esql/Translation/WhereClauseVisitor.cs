@@ -779,7 +779,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				_ = Visit(node.Object);
 				_ = _builder.Append(" LIKE ");
 				var containsValue = GetConstantValue(node.Arguments[0]);
-				_ = _builder.Append("\"*").Append(EscapeLikePattern(containsValue?.ToString() ?? "")).Append("*\"");
+				_ = _builder.Append(RenderPattern("*" + EscapeLikeMetacharacters(containsValue?.ToString() ?? "") + "*"));
 				break;
 
 			case "StartsWith":
@@ -787,7 +787,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				_ = Visit(node.Object);
 				_ = _builder.Append(" LIKE ");
 				var startsValue = GetConstantValue(node.Arguments[0]);
-				_ = _builder.Append('"').Append(EscapeLikePattern(startsValue?.ToString() ?? "")).Append("*\"");
+				_ = _builder.Append(RenderPattern(EscapeLikeMetacharacters(startsValue?.ToString() ?? "") + "*"));
 				break;
 
 			case "EndsWith":
@@ -795,7 +795,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				_ = Visit(node.Object);
 				_ = _builder.Append(" LIKE ");
 				var endsValue = GetConstantValue(node.Arguments[0]);
-				_ = _builder.Append("\"*").Append(EscapeLikePattern(endsValue?.ToString() ?? "")).Append('"');
+				_ = _builder.Append(RenderPattern("*" + EscapeLikeMetacharacters(endsValue?.ToString() ?? "")));
 				break;
 
 			case "CompareTo":
@@ -1266,9 +1266,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// A LIKE pattern of an element predicate, always as a literal: ES|QL takes a
-	/// literal after LIKE and rejects a parameter there, where a function argument
-	/// such as the prefix of STARTS_WITH may be one.
+	/// A LIKE pattern, always as a literal: ES|QL takes a literal after LIKE and rejects
+	/// a parameter there, where a function argument such as the prefix of STARTS_WITH
+	/// may be one. The pattern's own escapes go in first, the literal's on top of them.
 	/// </summary>
 	private static string RenderPattern(string pattern) => EsqlFormatting.FormatString(pattern);
 
@@ -1656,12 +1656,4 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	private static bool IsNullConstant(Expression expression) =>
 		expression is ConstantExpression { Value: null };
-
-	private static string EscapeLikePattern(string value) =>
-		// Escape special characters in LIKE patterns
-		value
-			.Replace("\\", "\\\\")
-			.Replace("\"", "\\\"")
-			.Replace("*", "\\*")
-			.Replace("?", "\\?");
 }
