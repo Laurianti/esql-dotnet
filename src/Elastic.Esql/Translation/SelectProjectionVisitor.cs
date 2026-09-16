@@ -327,7 +327,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	/// or <c>param != null ? param.Field : null</c> where one side of the test is a
 	/// <see cref="ParameterExpression"/> compared to null, and one branch is null/default.
 	/// </summary>
-	private static bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch)
+	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch)
 	{
 		nonNullBranch = null!;
 
@@ -363,8 +363,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 		// the guard only stands for the branch when the branch reads through the very
 		// path that was tested: "p.Supplier == null ? null : p.Name" keeps its own
-		// condition, or the emitted CASE would test the wrong field
-		if (guarded is MemberExpression && !ReadsThrough(branch, guarded))
+		// condition, or the emitted CASE would test the wrong field. The document row is
+		// never null, so a guard on the bare parameter is only a guard once a projection
+		// has made the parameter stand for a value that may be: then it is held to the
+		// same rule as a member path.
+		if ((guarded is MemberExpression || _context.HasProjected) && !ReadsThrough(branch, guarded))
 			return false;
 
 		nonNullBranch = branch;

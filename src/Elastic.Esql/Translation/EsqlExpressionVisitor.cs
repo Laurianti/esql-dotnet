@@ -262,11 +262,6 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 		var selector = node.Arguments[1];
 		if (selector is UnaryExpression { Operand: LambdaExpression lambda })
 		{
-			// From here the rows are whatever the selector built, not the document, unless
-			// the selector hands the row back as it is: an identity Select emits nothing
-			// and leaves the document where it was.
-			Context.HasProjected |= !IsIdentitySelector(lambda);
-
 			// Check if this Select follows a GroupBy (result selector for aggregations)
 			if (_pendingGroupByKeySelector != null)
 			{
@@ -275,12 +270,19 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				Context.Commands.Add(statsCommand);
 				_pendingGroupByKeySelector = null;
 				ClearMetadataAfterStats();
+				Context.HasProjected = true;
 				return;
 			}
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
 			var result = projectionVisitor.Translate(lambda);
 			EmitProjectionCommands(result);
+
+			// From here the rows are whatever the selector built, not the document, unless
+			// the selector hands the row back as it is: an identity Select emits nothing
+			// and leaves the document where it was. Raised after the translation, since
+			// within this selector the parameter is still the row that came before.
+			Context.HasProjected |= !IsIdentitySelector(lambda);
 		}
 	}
 
