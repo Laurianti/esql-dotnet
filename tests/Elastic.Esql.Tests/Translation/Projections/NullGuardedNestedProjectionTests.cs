@@ -131,6 +131,60 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOnAProjectedValue_IsKeptUnlessTheBranchReadsThroughIt()
+	{
+		// after Select(n => n.Child) the parameter stands for the child, which may well be
+		// null: a constant child would be emitted for it, where the source gives null
+		var query = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Select(n => n.Child)
+			.Select(n => new { Wrap = n == null ? null : new { Label = "x" } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void AGuardOnAProjectedValueReadThrough_IsUnwrapped()
+	{
+		var esql = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Select(n => n.Child)
+			.Select(n => new { Wrap = n == null ? null : new { n.Name } })
+			.ToString();
+
+		_ = esql.Should().Contain("RENAME name AS wrap.name");
+	}
+
+	[Test]
+	public void AGuardOnTheDocumentRow_StillTakesAConstantChild()
+	{
+		// the document row is never null, so the guard on it is no guard at all and the
+		// constant child is what the source gives
+		var esql = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Select(n => new { Wrap = n == null ? null : new { Label = "x" } })
+			.ToString();
+
+		_ = esql.Should().Contain("EVAL wrap.label = \"x\"");
+	}
+
+	[Test]
+	public void AGuardOverASearchFunction_IsRefused()
+	{
+		// MATCH answers a missing field with a definite no rather than null, so the guard
+		// cannot be dropped around it
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new { Host = l.Host == null ? null : new { Hit = EsqlFunctions.Match(l.Host.Name, "x") } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAChildWithAConstructorArgument_IsRefused()
 	{
 		// the argument of the constructor is a member of the child as much as a binding
