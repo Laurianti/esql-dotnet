@@ -664,6 +664,38 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	}
 
 	[Test]
+	public void MoreValuesThanTheExpressionAllows_AreRefused()
+	{
+		// each value of an In is a MATCH in an OR chain, and each adds a level to the
+		// expression Elasticsearch parses
+		var wanted = Enumerable.Range(0, EsqlQueryableExtensions.MaxMultiValueLimit + 1).Select(i => $"t{i}").ToList();
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*at most*");
+	}
+
+	[Test]
+	public void PositionsAndValuesTogether_AreBounded()
+	{
+		// under All the values are written out inside every position, so both count
+		var wanted = Enumerable.Range(0, 100).Select(i => $"t{i}").ToList();
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.MultiValueLimit(200)
+			.Where(p => p.Tags.All(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*together*");
+	}
+
+	[Test]
 	public void ALimitBelowOne_IsRefusedWhenStated()
 	{
 		var query = CreateQuery<TaggedProduct>().From("products");

@@ -1310,6 +1310,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					return true;
 				}
 
+				// each value adds one level to the expression, as each position does
+				if (predicate.Values.Count > EsqlQueryableExtensions.MaxMultiValueLimit)
+				{
+					throw new NotSupportedException(
+						$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
+						+ $"a level to the expression Elasticsearch parses, and at most {EsqlQueryableExtensions.MaxMultiValueLimit} fit.");
+				}
+
 				if (predicate.Values.Count > 1)
 					_ = _builder.Append('(');
 
@@ -1435,6 +1443,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ "StartsWith or All over a list, reads the field one position at a time and "
 				+ "needs to know how many to read: state it with MultiValueLimit(n). A document "
 				+ "holding more values than that is then left out of the result.");
+
+		// under In the values are written out inside every position as an OR chain, and
+		// a chain of n values adds n - 1 levels to the positions' own; a text predicate
+		// tests one value per position and adds none
+		if (predicate.Kind == ElementPredicateKind.In && positions + values.Count - 1 > EsqlQueryableExtensions.MaxMultiValueLimit)
+		{
+			throw new NotSupportedException(
+				$"{positions} positions and {values.Count} values together are more than the expression "
+				+ $"Elasticsearch parses allows: at most {EsqlQueryableExtensions.MaxMultiValueLimit} of both.");
+		}
 
 		// Rendered once, before the positions, so a captured value becomes one parameter
 		// rather than one per position. Anything but a string field is compared through
