@@ -5,10 +5,11 @@
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
-/// Any and All over a multi-value field with a predicate MATCH cannot answer, such as
-/// "starts with" or "greater than", and the way negation moves between the two. A
-/// predicate over the individual values reads the field one position at a time, and
-/// needs the caller to state how many with MultiValueLimit.
+/// Any and All over a multi-value field with a predicate MATCH cannot answer, and the
+/// way negation moves between the two. An ordering predicate such as "greater than" is
+/// answered whole by MV_MIN and MV_MAX; a text predicate such as "starts with" reads
+/// the field one position at a time, and needs the caller to state how many with
+/// MultiValueLimit.
 /// </summary>
 public class MultiValueQuantifierTests : EsqlTestBase
 {
@@ -19,22 +20,22 @@ public class MultiValueQuantifierTests : EsqlTestBase
 	/// A field holding more values than the positions read is answered as null, which
 	/// WHERE drops whether or not a NOT encloses it.
 	/// </summary>
-	private static string Bounded(string field, string positions) =>
-		$"CASE(MV_COUNT({field}) > {Positions}, NULL, ({positions}))";
+	private static string Bounded(string field, string positions, int limit = Positions) =>
+		$"CASE(MV_COUNT({field}) > {limit}, NULL, ({positions}))";
 
 	/// <summary>Any: the test holds at some position; an absent value does not count.</summary>
-	private static string AnyOf(string field, Func<string, string> test) =>
-		Bounded(field, string.Join(" OR ", Enumerable.Range(0, Positions)
-			.Select(position => $"COALESCE({test($"MV_SLICE({field}, {position}, {position})")}, false)")));
+	private static string AnyOf(string field, Func<string, string> test, int limit = Positions) =>
+		Bounded(field, string.Join(" OR ", Enumerable.Range(0, limit)
+			.Select(position => $"COALESCE({test($"MV_SLICE({field}, {position}, {position})")}, false)")), limit);
 
 	/// <summary>All: the test holds at every position that has a value.</summary>
-	private static string AllOf(string field, Func<string, string> test) =>
-		Bounded(field, string.Join(" AND ", Enumerable.Range(0, Positions)
+	private static string AllOf(string field, Func<string, string> test, int limit = Positions) =>
+		Bounded(field, string.Join(" AND ", Enumerable.Range(0, limit)
 			.Select(position =>
 			{
 				var value = $"MV_SLICE({field}, {position}, {position})";
 				return $"COALESCE({value} IS NULL OR {test(value)}, true)";
-			})));
+			})), limit);
 
 	[Test]
 	public void Any_StartsWith_MatchesSomeValue()
@@ -572,9 +573,9 @@ public class MultiValueQuantifierTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Be(
-			"""
+			$$"""
             FROM products
-            | WHERE CASE(MV_COUNT(tags) > 2, NULL, (COALESCE(STARTS_WITH(MV_SLICE(tags, 0, 0), "wat"), false) OR COALESCE(STARTS_WITH(MV_SLICE(tags, 1, 1), "wat"), false)))
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", limit: 2)}}
             """.NativeLineEndings());
 	}
 

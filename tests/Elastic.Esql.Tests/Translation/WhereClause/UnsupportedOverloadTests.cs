@@ -76,7 +76,7 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
-	public void CompareToOutsideAComparisonAgainstZero_IsRefused()
+	public void CompareOrdinalOutsideAComparisonAgainstZero_IsRefused()
 	{
 		var query = CreateQuery<LogEntry>()
 			.From("logs-*")

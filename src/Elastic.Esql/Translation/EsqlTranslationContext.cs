@@ -33,8 +33,8 @@ internal sealed class EsqlTranslationContext
 
 	/// <summary>
 	/// How many values of a multi-value field a predicate may read, one position at a
-	/// time, as stated with <c>MultiValueLimit</c>. Null until stated, and then the
-	/// predicates that need it are not translated.
+	/// time, as stated with <c>MultiValueLimit</c>. Null until stated; while it is null,
+	/// the predicates that need it are refused rather than translated.
 	/// </summary>
 	public int? MultiValueLimit { get; set; }
 
