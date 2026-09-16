@@ -131,6 +131,23 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AGuardOverAChildWithANestedInitializer_IsRefused()
+	{
+		// "Geo = { City = ... }" is a binding that is not an assignment: nothing is read
+		// into it, so it cannot be said to read through the guarded path
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument
+			{
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name, Geo = { City = "constant" } }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
 	public void AGuardOverAChildWithAConstantMember_IsRefused()
 	{
 		// one member reads through Host, the other is a constant: for a document with

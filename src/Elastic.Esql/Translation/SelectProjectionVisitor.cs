@@ -383,10 +383,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			UnaryExpression unary => ReadsThrough(unary.Operand, path),
 			// a nested init reads through the path only when every member does: a constant
 			// member would be emitted for a missing parent, where the source gives null,
-			// and a child made of constants alone has nothing that reads through at all
-			MemberInitExpression init => init.Bindings.OfType<MemberAssignment>() is var bindings
-				&& bindings.Any()
-				&& bindings.All(b => ReadsThrough(b.Expression, path)),
+			// and a child made of constants alone has nothing that reads through at all.
+			// A binding that is not an assignment, such as a nested initializer without
+			// new, is not read into, so it does not read through either.
+			MemberInitExpression init => init.Bindings.Count > 0
+				&& init.Bindings.All(b => b is MemberAssignment assignment && ReadsThrough(assignment.Expression, path)),
 			// the same for a child built with new, anonymous or by constructor: every
 			// argument has to read through the path
 			NewExpression construction => construction.Arguments.Count > 0
