@@ -4,7 +4,6 @@
 
 using System.Collections;
 using System.Collections.Concurrent;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -1105,21 +1104,23 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// Whether enumerating the collection and comparing its values with ES|QL's equality
 	/// answers Contains the way the collection does. Only a collection of a known kind
-	/// is taken to: arrays, lists, the LINQ operators, and the read-only, immutable and
-	/// concurrent lists of the base library, which all compare with default equality. A
-	/// set of any kind carries its own comparer, a dictionary and its keys likewise, and
-	/// a collection type of the caller's own may answer Contains in any way at all: those
-	/// are refused rather than answered with a comparison they might not make. A set
-	/// built with the default comparer is refused all the same, since telling it apart
-	/// would take reflection the trimmer cannot follow.
+	/// is taken to: arrays, lists, the LINQ operators, and the immutable and concurrent
+	/// lists of the base library, which all compare with default equality. A set of any
+	/// kind carries its own comparer, a dictionary and its keys likewise, a collection
+	/// type of the caller's own may answer Contains in any way at all, and so may a
+	/// wrapper such as ReadOnlyCollection, which hands Contains to the list it wraps:
+	/// those are refused rather than answered with a comparison they might not make. A
+	/// set built with the default comparer is refused all the same, since telling it
+	/// apart would take reflection the trimmer cannot follow.
 	/// </summary>
 	private static bool UsesDefaultEquality(IEnumerable collection)
 	{
 		var type = collection.GetType();
 
-		// the LINQ operators are the non-public iterator types of System.Linq; a public
-		// type there, such as Lookup, answers Contains its own way
-		if (type.IsArray || (type.Namespace == "System.Linq" && !type.IsPublic))
+		// the LINQ operators are the non-public iterator types of System.Linq, in the
+		// framework's own assembly; a public type there, such as Lookup, answers Contains
+		// its own way
+		if (type.IsArray || (type.Namespace == "System.Linq" && !type.IsPublic && type.Assembly == typeof(Enumerable).Assembly))
 			return true;
 
 		if (!type.IsGenericType)
@@ -1128,9 +1129,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var definition = type.GetGenericTypeDefinition();
 
 		return definition == typeof(List<>)
-			|| definition == typeof(Collection<>)
-			|| definition == typeof(ReadOnlyCollection<>)
-			|| definition == typeof(ObservableCollection<>)
 			|| definition == typeof(Queue<>)
 			|| definition == typeof(Stack<>)
 			|| definition == typeof(LinkedList<>)

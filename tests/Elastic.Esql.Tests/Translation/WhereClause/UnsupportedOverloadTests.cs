@@ -290,6 +290,22 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AReadOnlyWrapper_IsRefusedForWhatItMayWrap()
+	{
+		// ReadOnlyCollection hands Contains to the list it wraps, which may be a list of
+		// the caller's own with an equality of its own
+		var wanted = new ReadOnlyCollection<string>(new List<string> { "iot" });
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*default equality*");
+	}
+
+	[Test]
 	public void ALinqQuery_IsTranslated()
 	{
 		// the LINQ operators compare with default equality
