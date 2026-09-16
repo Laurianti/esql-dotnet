@@ -694,12 +694,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return true;
 	}
 
-	private string? AsNullableField(Expression expression) =>
-		expression is MemberExpression member
-		&& ExpressionTranslationHelpers.IsRootedInParameter(member)
-		&& IsDeclaredNullable(member.Member)
-			? ResolveFieldPath(member)
-			: null;
+	private string? AsNullableField(Expression expression) => expression switch
+	{
+		MemberExpression member when IsNullableFieldMember(member) => ResolveFieldPath(member),
+		// a multi-field of a nullable member is missing when the member is: the guard
+		// goes on the path as emitted, member and multi-field name together
+		MethodCallExpression { Method.Name: "MultiField", Arguments: [MemberExpression member, ConstantExpression { Value: string }] } call
+			when call.Method.DeclaringType == typeof(GeneralPurposeExtensions) && IsNullableFieldMember(member)
+			=> call.ResolveFieldName(_context.Metadata),
+		_ => null
+	};
+
+	private static bool IsNullableFieldMember(MemberExpression member) =>
+		ExpressionTranslationHelpers.IsRootedInParameter(member) && IsDeclaredNullable(member.Member);
 
 	/// <summary>
 	/// Whether the member is declared as a nullable reference. Only then is the guard

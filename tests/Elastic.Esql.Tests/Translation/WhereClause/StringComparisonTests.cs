@@ -170,6 +170,23 @@ public class StringComparisonTests : EsqlTestBase
 	}
 
 	[Test]
+	public void ANullableFieldBehindAMultiField_IsStillGuarded()
+	{
+		// the multi-field is missing whenever the field is: the guard reads the member's
+		// nullability and names the path as emitted
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.Compare(l.ClientIp.MultiField("keyword"), "m", StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE (clientIp.keyword IS NULL OR clientIp.keyword < "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void ANullableFieldDeclaredThroughTheTypeContext_IsStillGuarded()
 	{
 		// every member of OptionalDocument is nullable, so the compiler records that once
