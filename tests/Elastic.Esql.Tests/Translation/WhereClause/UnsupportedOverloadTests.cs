@@ -2,6 +2,10 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Collections.Frozen;
+using System.Collections.Immutable;
+using System.Collections.ObjectModel;
+
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
@@ -255,6 +259,64 @@ public class UnsupportedOverloadTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AFrozenSetWithItsOwnComparer_IsRefused()
+	{
+		// a set of any kind carries its own comparer, not only the ones known by name
+		var wanted = new[] { "IOT" }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*default equality*");
+	}
+
+	[Test]
+	public void ACollectionTypeOfTheCallersOwn_IsRefused()
+	{
+		// its Contains may compare in any way at all; only the known kinds are taken to
+		// compare with default equality
+		var wanted = new NamedHosts { new NamedHost("IOT") };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*default equality*");
+	}
+
+	[Test]
+	public void ALinqQuery_IsTranslated()
+	{
+		// the LINQ operators compare with default equality
+		var wanted = new[] { "IOT" }.Select(tag => tag.ToLowerInvariant());
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
+	}
+
+	[Test]
+	public void AnImmutableArray_IsTranslated()
+	{
+		var wanted = ImmutableArray.Create("iot");
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Contain("MATCH(tags, \"iot\")");
+	}
+
+	[Test]
 	public void AListWithDefaultEquality_IsStillTranslated()
 	{
 		// a list has no equality of its own, so membership is plain equality
@@ -338,3 +400,11 @@ public class UnsupportedOverloadTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*IS NULL*");
 	}
 }
+
+/// <summary>A collection type of the caller's own, whose Contains compares by a key of its choosing.</summary>
+public sealed class NamedHosts() : KeyedCollection<string, NamedHost>(StringComparer.OrdinalIgnoreCase)
+{
+	protected override string GetKeyForItem(NamedHost item) => item.Name;
+}
+
+public sealed record NamedHost(string Name);

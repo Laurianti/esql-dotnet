@@ -3,6 +3,8 @@
 // See the LICENSE file in the project root for more information
 
 using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -1047,7 +1049,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
 					// which the emitted comparison does not reproduce
 					if (!UsesDefaultEquality(collection))
-						return null;
+					{
+						throw new NotSupportedException(
+							$"Contains over a {TypeName(collection.GetType())} is not supported: a set, a dictionary "
+							+ "or a collection type of your own may compare its values in a way of its own, "
+							+ "which the emitted comparison would not follow. Pass an array, a List or a "
+							+ "LINQ query, which compare with default equality.");
+					}
 
 					var candidates = collection.Cast<object?>().ToList();
 
@@ -1095,33 +1103,48 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
 
 	/// <summary>
-	/// Whether a collection decides membership by default equality. A set or a
-	/// dictionary's keys answer Contains through the comparer they were built with,
-	/// which the emitted comparison does not reproduce, and reading that comparer back
-	/// takes reflection the trimmer cannot see through. Those families are therefore
-	/// left untranslated; arrays, lists and the like have no equality of their own.
+	/// Whether enumerating the collection and comparing its values with ES|QL's equality
+	/// answers Contains the way the collection does. Only a collection of a known kind
+	/// is taken to: arrays, lists, the LINQ operators, and the read-only, immutable and
+	/// concurrent lists of the base library, which all compare with default equality. A
+	/// set of any kind carries its own comparer, a dictionary and its keys likewise, and
+	/// a collection type of the caller's own may answer Contains in any way at all: those
+	/// are refused rather than answered with a comparison they might not make. A set
+	/// built with the default comparer is refused all the same, since telling it apart
+	/// would take reflection the trimmer cannot follow.
 	/// </summary>
 	private static bool UsesDefaultEquality(IEnumerable collection)
 	{
-		for (var type = collection.GetType(); type is not null; type = type.BaseType)
-		{
-			if (!type.IsGenericType)
-				continue;
+		var type = collection.GetType();
 
-			var definition = type.GetGenericTypeDefinition();
+		// the LINQ operators are the non-public iterator types of System.Linq; a public
+		// type there, such as Lookup, answers Contains its own way
+		if (type.IsArray || (type.Namespace == "System.Linq" && !type.IsPublic))
+			return true;
 
-			if (definition == typeof(HashSet<>)
-				|| definition == typeof(SortedSet<>)
-				|| definition == typeof(Dictionary<,>.KeyCollection)
-				|| definition == typeof(SortedDictionary<,>.KeyCollection)
-				|| definition.FullName is "System.Collections.Immutable.ImmutableHashSet`1"
-					or "System.Collections.Immutable.ImmutableSortedSet`1"
-					or "System.Collections.Concurrent.ConcurrentDictionary`2")
-				return false;
-		}
+		if (!type.IsGenericType)
+			return false;
 
-		return true;
+		var definition = type.GetGenericTypeDefinition();
+
+		return definition == typeof(List<>)
+			|| definition == typeof(Collection<>)
+			|| definition == typeof(ReadOnlyCollection<>)
+			|| definition == typeof(ObservableCollection<>)
+			|| definition == typeof(Queue<>)
+			|| definition == typeof(Stack<>)
+			|| definition == typeof(LinkedList<>)
+			|| definition == typeof(ArraySegment<>)
+			|| definition == typeof(ConcurrentBag<>)
+			|| definition == typeof(ConcurrentQueue<>)
+			|| definition == typeof(ConcurrentStack<>)
+			|| definition.FullName is "System.Collections.Immutable.ImmutableArray`1"
+				or "System.Collections.Immutable.ImmutableList`1";
 	}
+
+	/// <summary>The name of a type without the arity a generic one carries, for a message.</summary>
+	private static string TypeName(Type type) =>
+		type.Name.IndexOf('`') is var arity and >= 0 ? type.Name.Substring(0, arity) : type.Name;
 
 	/// <summary>The captured variable an expression reads, when it reads one.</summary>
 	private static string? CapturedName(Expression expression) =>
