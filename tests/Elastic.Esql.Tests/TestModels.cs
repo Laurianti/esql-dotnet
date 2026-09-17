@@ -363,6 +363,9 @@ public class NestedSelectionGeo
 [JsonSerializable(typeof(MixedDotModel))]
 [JsonSerializable(typeof(OuterWithDotInner))]
 [JsonSerializable(typeof(PersonWithTaggedAddress))]
+[JsonSerializable(typeof(SourceOrder))]
+[JsonSerializable(typeof(SourceOrderLine))]
+[JsonSerializable(typeof(SourceOrderWithTotal))]
 [JsonSerializable(typeof(MultiNestedModel))]
 [JsonSerializable(typeof(NullableNestedModel))]
 [JsonSerializable(typeof(FlatDotFallbackModel))]
@@ -599,6 +602,30 @@ public class SetTaggedProduct
 {
 	public string Name { get; set; } = string.Empty;
 	public HashSet<string> Tags { get; set; } = [];
+}
+
+/// <summary>An element of a list of objects, the shape the columnar form cannot express.</summary>
+public class SourceOrderLine
+{
+	public string Sku { get; set; } = string.Empty;
+
+	public int Quantity { get; set; }
+}
+
+/// <summary>A document holding a list of objects, which reaches ES|QL as one column per member.</summary>
+public class SourceOrder
+{
+	public string Reference { get; set; } = string.Empty;
+
+	public List<SourceOrderLine> Lines { get; set; } = [];
+}
+
+/// <summary>A document read together with a column an EVAL computes, which the indexed document does not carry.</summary>
+public class SourceOrderWithTotal
+{
+	public string Reference { get; set; } = string.Empty;
+
+	public int Total { get; set; }
 }
 
 /// <summary>A document whose tags are declared through an interface, which says nothing about the collection behind it.</summary>
