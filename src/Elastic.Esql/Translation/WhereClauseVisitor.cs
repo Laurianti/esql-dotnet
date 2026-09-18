@@ -1112,82 +1112,82 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				return TryParseElementPredicate(disjunction.Right, element, negated);
 
 			case BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison:
-			{
-				var value = comparison.Left == element ? comparison.Right
-					: comparison.Right == element ? comparison.Left
-					: null;
+				{
+					var value = comparison.Left == element ? comparison.Right
+						: comparison.Right == element ? comparison.Left
+						: null;
 
-				if (value is null || !TryGetConstant(value, out var constant))
-					return null;
+					if (value is null || !TryGetConstant(value, out var constant))
+						return null;
 
-				var isEqual = comparison.NodeType == ExpressionType.Equal;
-				return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
-			}
+					var isEqual = comparison.NodeType == ExpressionType.Equal;
+					return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
+				}
 
 			case BinaryExpression
 			{
 				NodeType: ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
 					or ExpressionType.LessThan or ExpressionType.LessThanOrEqual
 			} ordering:
-			{
-				// "10 < x" is "x > 10": keep the element on the left
-				var elementOnLeft = ordering.Left == element;
-				var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
-
-				if (value is null || !TryGetConstant(value, out var constant))
-					return null;
-
-				var kind = (ordering.NodeType, elementOnLeft) switch
 				{
-					(ExpressionType.GreaterThan, true) or (ExpressionType.LessThan, false) => ElementPredicateKind.GreaterThan,
-					(ExpressionType.GreaterThanOrEqual, true) or (ExpressionType.LessThanOrEqual, false) => ElementPredicateKind.GreaterThanOrEqual,
-					(ExpressionType.LessThan, true) or (ExpressionType.GreaterThan, false) => ElementPredicateKind.LessThan,
-					_ => ElementPredicateKind.LessThanOrEqual
-				};
+					// "10 < x" is "x > 10": keep the element on the left
+					var elementOnLeft = ordering.Left == element;
+					var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
 
-				return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
-			}
+					if (value is null || !TryGetConstant(value, out var constant))
+						return null;
+
+					var kind = (ordering.NodeType, elementOnLeft) switch
+					{
+						(ExpressionType.GreaterThan, true) or (ExpressionType.LessThan, false) => ElementPredicateKind.GreaterThan,
+						(ExpressionType.GreaterThanOrEqual, true) or (ExpressionType.LessThanOrEqual, false) => ElementPredicateKind.GreaterThanOrEqual,
+						(ExpressionType.LessThan, true) or (ExpressionType.GreaterThan, false) => ElementPredicateKind.LessThan,
+						_ => ElementPredicateKind.LessThanOrEqual
+					};
+
+					return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
+				}
 
 			case MethodCallExpression call:
-			{
-				// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a")
-				if (call.Object == element && call.Method.DeclaringType == typeof(string) && call.Arguments.Count == 1)
 				{
-					if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
-						|| !TryGetConstant(call.Arguments[0], out var constant))
-						return null;
-
-					return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
-				}
-
-				// values.Contains(x), over a constant collection
-				if (TryGetContainsArguments(call, out var valueExpression, out var collection)
-					&& valueExpression == element
-					&& collection is not null)
-				{
-					// enumerating the collection loses the equality it was built with: a set
-					// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
-					// which the emitted comparison does not reproduce
-					if (!UsesDefaultEquality(collection))
+					// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a")
+					if (call.Object == element && call.Method.DeclaringType == typeof(string) && call.Arguments.Count == 1)
 					{
-						throw new NotSupportedException(
-							$"Contains over a {TypeName(collection.GetType())} is not supported: a set, a dictionary "
-							+ "or a collection type of your own may compare its values in a way of its own, "
-							+ "which the emitted comparison would not follow. Pass an array, a List or a "
-							+ "LINQ query, which compare with default equality.");
+						if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
+							|| !TryGetConstant(call.Arguments[0], out var constant))
+							return null;
+
+						return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
 					}
 
-					var candidates = collection.Cast<object?>().ToList();
+					// values.Contains(x), over a constant collection
+					if (TryGetContainsArguments(call, out var valueExpression, out var collection)
+						&& valueExpression == element
+						&& collection is not null)
+					{
+						// enumerating the collection loses the equality it was built with: a set
+						// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
+						// which the emitted comparison does not reproduce
+						if (!UsesDefaultEquality(collection))
+						{
+							throw new NotSupportedException(
+								$"Contains over a {TypeName(collection.GetType())} is not supported: a set, a dictionary "
+								+ "or a collection type of your own may compare its values in a way of its own, "
+								+ "which the emitted comparison would not follow. Pass an array, a List or a "
+								+ "LINQ query, which compare with default equality.");
+						}
 
-					// a stored value is never null, and MATCH(field, null) is not valid ES|QL
-					if (candidates.Any(candidate => candidate is null))
-						return null;
+						var candidates = collection.Cast<object?>().ToList();
 
-					return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
+						// a stored value is never null, and MATCH(field, null) is not valid ES|QL
+						if (candidates.Any(candidate => candidate is null))
+							return null;
+
+						return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
+					}
+
+					return null;
 				}
-
-				return null;
-			}
 
 			default:
 				return null;
@@ -1356,28 +1356,28 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			// some value is above v when the largest is; every value is when the smallest is
 			case ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual
 				or ElementPredicateKind.LessThan or ElementPredicateKind.LessThanOrEqual:
-			{
-				var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
-				var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
-				var op = predicate.Kind switch
 				{
-					ElementPredicateKind.GreaterThan => ">",
-					ElementPredicateKind.GreaterThanOrEqual => ">=",
-					ElementPredicateKind.LessThan => "<",
-					_ => "<="
-				};
+					var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
+					var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
+					var op = predicate.Kind switch
+					{
+						ElementPredicateKind.GreaterThan => ">",
+						ElementPredicateKind.GreaterThanOrEqual => ">=",
+						ElementPredicateKind.LessThan => "<",
+						_ => "<="
+					};
 
-				// MV_MIN and MV_MAX are null over a missing field, and so would be the
-				// whole predicate, which then answers neither true nor false. A missing
-				// field is an empty sequence: All holds over it and Any does not, and
-				// saying so explicitly keeps an enclosing NOT meaningful.
-				_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
+					// MV_MIN and MV_MAX are null over a missing field, and so would be the
+					// whole predicate, which then answers neither true nor false. A missing
+					// field is an empty sequence: All holds over it and Any does not, and
+					// saying so explicitly keeps an enclosing NOT meaningful.
+					_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
 
-				_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
-					.Append(RenderValue(predicate, 0)).Append(')');
+					_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
+						.Append(RenderValue(predicate, 0)).Append(')');
 
-				return true;
-			}
+					return true;
+				}
 
 			default:
 				return TryAppendValuePattern(name, elementType, all, predicate);
