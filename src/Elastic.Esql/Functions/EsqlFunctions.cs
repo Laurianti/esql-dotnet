@@ -141,6 +141,7 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Performs a full-text match. Translates to MATCH(field, query).</summary>
+	[AnswersOverNull]
 	public static bool Match(string field, string query) => Throw<bool>();
 
 	/// <summary>Performs a LIKE pattern match. Translates to field LIKE pattern.</summary>
@@ -154,12 +155,15 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Checks if a value is null. Translates to field IS NULL.</summary>
+	[AnswersOverNull]
 	public static bool IsNull<T>(T field) => Throw<bool>();
 
 	/// <summary>Checks if a value is not null. Translates to field IS NOT NULL.</summary>
+	[AnswersOverNull]
 	public static bool IsNotNull<T>(T field) => Throw<bool>();
 
 	/// <summary>Returns the first non-null value. Translates to COALESCE(a, b, ...).</summary>
+	[AnswersOverNull]
 	public static T Coalesce<T>(params T[] values) => Throw<T>();
 
 	// ============================================================================
@@ -253,12 +257,15 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Performs a phrase match. Translates to MATCH_PHRASE(field, phrase).</summary>
+	[AnswersOverNull]
 	public static bool MatchPhrase(string field, string phrase) => Throw<bool>();
 
 	/// <summary>Performs a KQL query. Translates to KQL(query).</summary>
+	[AnswersOverNull]
 	public static bool Kql(string query) => Throw<bool>();
 
 	/// <summary>Performs a query string query. Translates to QSTR(query).</summary>
+	[AnswersOverNull]
 	public static bool Qstr(string query) => Throw<bool>();
 
 	/// <summary>Returns the relevance score. Translates to SCORE().</summary>
@@ -275,6 +282,7 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Checks if an IP matches a CIDR range. Translates to CIDR_MATCH(ip, cidr).</summary>
+	[AnswersOverNull]
 	public static bool CidrMatch(string ip, string cidr) => Throw<bool>();
 
 	/// <summary>Returns the IP prefix. Translates to IP_PREFIX(ip, prefixLength, ipVersion).</summary>
@@ -377,12 +385,14 @@ public static class EsqlFunctions
 	/// <c>T = byte</c> for both <c>element_type: "byte"</c> and <c>element_type: "bit"</c>. The vector
 	/// converter handles signed-byte wire semantics for <c>byte</c> vectors automatically.
 	/// </remarks>
+	[AnswersOverNull]
 	public static bool Knn<T>(DenseVector<T> field, DenseVector<T> query) where T : struct => Throw<bool>();
 
 	/// <summary>
 	/// Approximate k-nearest-neighbour search with typed <see cref="KnnOptions"/>. Translates to
 	/// KNN(field, query, { ... }) where each set property renders as its snake_case ES|QL counterpart.
 	/// </summary>
+	[AnswersOverNull]
 	public static bool Knn<T>(DenseVector<T> field, DenseVector<T> query, KnnOptions options) where T : struct => Throw<bool>();
 
 	/// <summary>Generates a query vector from text using the given inference endpoint. Translates to TEXT_EMBEDDING(text, inferenceId).</summary>
