@@ -11,7 +11,7 @@ public class NestedSubFieldSelectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => l.Host.Name)
+			.Select(l => l.Host!.Name)
 			.ToString();
 
 		_ = esql.Should().Be(
@@ -41,7 +41,7 @@ public class NestedSubFieldSelectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new { HostName = l.Host.Name })
+			.Select(l => new { HostName = l.Host!.Name })
 			.ToString();
 
 		_ = esql.Should().Be(
@@ -57,7 +57,7 @@ public class NestedSubFieldSelectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new { l.Message, HostName = l.Host.Name, l.Host.Geo.City })
+			.Select(l => new { l.Message, HostName = l.Host!.Name, l.Host!.Geo!.City })
 			.ToString();
 
 		_ = esql.Should().Be(
@@ -73,7 +73,7 @@ public class NestedSubFieldSelectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new { HostName = l.Host.Name, AgentName = l.Agent.Name })
+			.Select(l => new { HostName = l.Host!.Name, AgentName = l.Agent!.Name })
 			.ToString();
 
 		_ = esql.Should().Be(

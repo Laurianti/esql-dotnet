@@ -19,7 +19,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name }
 			})
 			.ToString();
 
@@ -43,8 +43,8 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 					? null
 					: new NestedSelectionHost
 					{
-						Name = l.Host.Name,
-						Geo = l.Host.Geo == null ? null : new NestedSelectionGeo { City = l.Host.Geo.City }
+						Name = l.Host!.Name,
+						Geo = l.Host.Geo == null ? null : new NestedSelectionGeo { City = l.Host!.Geo!.City }
 					}
 			})
 			.ToString();
@@ -69,13 +69,13 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 					? null
 					: new NestedSelectionHost
 					{
-						Geo = l.Agent == null ? null : new NestedSelectionGeo { City = l.Host.Geo.City }
+						Geo = l.Agent == null ? null : new NestedSelectionGeo { City = l.Host!.Geo!.City }
 					}
 			});
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -88,7 +88,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new EagerNestedDocument
 			{
-				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name }
+				Host = l.Host == null ? null! : new NestedSelectionHost { Name = l.Host!.Name }
 			});
 
 		var act = () => query.ToString();
@@ -103,7 +103,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 		// cannot hold the null the guard produces
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new EagerHostRecord(l.Host == null ? null! : new NestedSelectionHost { Name = l.Host.Name }));
+			.Select(l => new EagerHostRecord(l.Host == null ? null! : new NestedSelectionHost { Name = l.Host!.Name }));
 
 		var act = () => query.ToString();
 
@@ -115,7 +115,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new LazyHostRecord(l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }))
+			.Select(l => new LazyHostRecord(l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name }))
 			.ToString();
 
 		_ = esql.Should().Contain("host.name");
@@ -128,7 +128,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = new NestedSelectionHost { Name = l.Host.Name }
+				Host = new NestedSelectionHost { Name = l.Host!.Name }
 			})
 			.ToString();
 
@@ -151,7 +151,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -208,7 +208,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -225,7 +225,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -254,7 +254,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -269,7 +269,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -308,7 +308,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -320,12 +320,12 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new
 			{
-				Host = l.Host == null ? null : new NestedSelectionHostWithTag("constant") { Name = l.Host.Name }
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag("constant") { Name = l.Host!.Name }
 			});
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -335,12 +335,12 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new
 			{
-				Host = l.Host == null ? null : new NestedSelectionHostWithTag(l.Host.Name) { Name = l.Host.Name }
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag(l.Host.Name) { Name = l.Host!.Name }
 			});
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -378,17 +378,20 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	public void Select_GuardOverAChildWithANestedInitializer_ThrowsNotSupported()
 	{
 		// "Geo = { City = ... }" is a binding that is not an assignment: nothing is read
-		// into it, so it cannot be said to read through the guarded path
+		// into it, so it cannot be said to read through the guarded path. The shape under
+		// test is the one the compiler warns about, so the warning is suppressed here.
+#pragma warning disable CS8670
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name, Geo = { City = "constant" } }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name, Geo = { City = "constant" } }
 			});
+#pragma warning restore CS8670
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -403,12 +406,12 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			{
 				Host = l.Host == null
 					? null
-					: new NestedSelectionHost { Name = "constant", Geo = new NestedSelectionGeo { City = l.Host.Geo.City } }
+					: new NestedSelectionHost { Name = "constant", Geo = new NestedSelectionGeo { City = l.Host!.Geo!.City } }
 			});
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -425,7 +428,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 
 	[Test]
@@ -478,5 +481,22 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
+	}
+
+	[Test]
+	public void Select_GuardOnTheLookupSideOfAJoin_IsKeptUnlessTheBranchReadsThroughIt()
+	{
+		// a row with no match leaves the lookup parameter null, unlike the document row,
+		// so a guard on it says something and a child that reads elsewhere keeps it
+		var lookup = CreateQuery<LanguageLookup>().From("languages_lookup");
+
+		var query = CreateQuery<LogEntry>()
+			.From("employees")
+			.LeftJoin(lookup, o => o.StatusCode, i => i.LanguageCode,
+				(o, i) => new { o.Message, Lang = i == null ? null : new { Label = o.Message } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 }

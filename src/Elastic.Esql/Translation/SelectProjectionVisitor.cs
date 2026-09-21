@@ -52,7 +52,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	public ProjectionResult TranslateJoinProjection(
 		LambdaExpression lambda,
 		ParameterExpression outerParam,
-		Dictionary<string, string> outerFieldRemappings
+		Dictionary<string, string>? outerFieldRemappings
 	)
 	{
 		_outerParameter = outerParam;
@@ -246,8 +246,10 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// produces has no way to reach the row, so the shape is refused. A guard on
 			// the row parameter is not one of those cases: the document is never null, so
 			// the guard is redundant rather than meaningful, and dropping it changes
-			// nothing about what reaches the row.
-			if (!targetCanHoldNull && guardedChildPath is not ParameterExpression)
+			// nothing about what reaches the row. The lookup side of a join is null for a
+			// row with no match, so a guard there is meaningful like any other.
+			if (!targetCanHoldNull
+				&& (guardedChildPath is not ParameterExpression || IsJoinLookupParameter(guardedChildPath)))
 			{
 				throw new NotSupportedException(
 					$"A null guard around {targetName} cannot be translated: the member is not declared "
@@ -333,8 +335,9 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// the same as for a guarded child: with the guard dropped, a missing value
 			// comes back as the member's default, which is the guard's null only for a
 			// member that can hold it, and a guard on the row parameter is redundant
-			// rather than meaningful
-			if (!targetCanHoldNull && guardedValuePath is not ParameterExpression)
+			// rather than meaningful, unlike one on the lookup side of a join
+			if (!targetCanHoldNull
+				&& (guardedValuePath is not ParameterExpression || IsJoinLookupParameter(guardedValuePath)))
 			{
 				throw new NotSupportedException(
 					$"A null guard around {targetName} cannot be translated: the member is not declared "
@@ -438,15 +441,27 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		// the guard only stands for the branch when the branch reads through the very
 		// path that was tested: "p.Supplier == null ? null : p.Name" keeps its own
 		// condition, or the emitted CASE would test the wrong field. The document row is
-		// never null, so a guard on the bare parameter is only a guard once a projection
-		// has made the parameter stand for a value that may be: then it is held to the
-		// same rule as a member path.
-		if ((guarded is MemberExpression || _context.HasProjected) && !ReadsThrough(branch, guarded))
+		// never null, so a guard on the bare parameter is only a guard once the parameter
+		// stands for a value that may be: after a projection, or on the lookup side of a
+		// join, where a row with no match leaves it null. Then it is held to the same rule
+		// as a member path.
+		if ((guarded is MemberExpression || _context.HasProjected || IsJoinLookupParameter(guarded))
+			&& !ReadsThrough(branch, guarded))
 			return false;
 
 		nonNullBranch = branch;
 		return true;
 	}
+
+	/// <summary>
+	/// Whether the expression is the lookup-side parameter of a join result selector: a
+	/// row with no match leaves it null, so a guard on it says something, unlike one on
+	/// the document row.
+	/// </summary>
+	private bool IsJoinLookupParameter(Expression expression) =>
+		_outerParameter is not null
+		&& expression is ParameterExpression parameter
+		&& parameter != _outerParameter;
 
 	/// <summary>
 	/// Whether a member can hold the null a dropped guard produces: one declared as a

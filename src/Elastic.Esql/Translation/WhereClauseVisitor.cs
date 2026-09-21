@@ -1261,6 +1261,44 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return true;
 	}
 
+	/// <summary>
+	/// Whether the member is declared nullable: a <c>Nullable&lt;T&gt;</c>, or a reference
+	/// annotated as nullable. A projection asks this of the member it assigns, to know
+	/// whether the null a dropped guard produces has a place to go.
+	/// </summary>
+	internal static bool IsDeclaredNullable(MemberInfo member)
+	{
+		var type = member switch
+		{
+			PropertyInfo property => property.PropertyType,
+			FieldInfo field => field.FieldType,
+			_ => null
+		};
+
+		if (type is null)
+			return false;
+
+		if (Nullable.GetUnderlyingType(type) is not null)
+			return true;
+
+		if (type.IsValueType)
+			return false;
+
+		var own = NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
+
+		if (own is not null)
+			return own == 2;
+
+		for (var declaring = member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
+		{
+			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+			if (context is not null)
+				return context == 2;
+		}
+
+		return false;
+	}
 
 	/// <summary>
 	/// The same for a constructor parameter, which stands for the member it initializes:

@@ -54,9 +54,9 @@ internal sealed class JoinTranslator(EsqlTranslationContext context, ProjectionC
 			_context.Commands.Add(new WhereCommand($"{whereNotNullField} IS NOT NULL"));
 
 		var projectionVisitor = new SelectProjectionVisitor(_context);
-		var result = remappings is not null
-			? projectionVisitor.TranslateJoinProjection(resultLambda, resultLambda.Parameters[0], remappings)
-			: projectionVisitor.Translate(resultLambda);
+		// the outer parameter is named either way: the lookup side is the other one, and a
+		// guard on it is meaningful, since a row with no match leaves it null
+		var result = projectionVisitor.TranslateJoinProjection(resultLambda, resultLambda.Parameters[0], remappings);
 
 		var innerFieldNames = _context.GetAllFieldNames(innerType);
 		_projectionEmitter.Emit(result, innerFieldNames);
