@@ -14,6 +14,10 @@ namespace Elastic.Esql.Tests;
 
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TreeNode))]
+[JsonSerializable(typeof(OptionalDocument))]
+[JsonSerializable(typeof(PrefixedCodeDocument))]
+[JsonSerializable(typeof(NullableNestedModel))]
+[JsonSerializable(typeof(AddressModel))]
 [JsonSerializable(typeof(SimpleDocument))]
 [JsonSerializable(typeof(MetricDocument))]
 [JsonSerializable(typeof(EventDocument))]
@@ -46,6 +50,34 @@ public class TreeNode
 	public string Name { get; set; } = string.Empty;
 
 	public TreeNode? Child { get; set; }
+}
+
+/// <summary>
+/// Document whose members are all nullable: the compiler then records the annotation
+/// once on the type, as a NullableContext, rather than on each member.
+/// </summary>
+public class OptionalDocument
+{
+	public string? Message { get; set; }
+
+	public string? ClientIp { get; set; }
+}
+
+/// <summary>Serializes a code as its prefixed form, so a compared value has to go through it.</summary>
+public class PrefixedCodeConverter : JsonConverter<string>
+{
+	public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+		(reader.GetString() ?? throw new JsonException("Expected a string.")).Replace("CODE-", "");
+
+	public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+		writer.WriteStringValue($"CODE-{value}");
+}
+
+/// <summary>Document whose string property is serialized through a converter of its own.</summary>
+public class PrefixedCodeDocument
+{
+	[JsonConverter(typeof(PrefixedCodeConverter))]
+	public string Code { get; set; } = string.Empty;
 }
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
