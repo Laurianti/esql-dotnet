@@ -1263,6 +1263,40 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 
 	/// <summary>
+	/// The same for a constructor parameter, which stands for the member it initializes:
+	/// its own attribute first, then the context of the constructor and of its declaring
+	/// types.
+	/// </summary>
+	internal static bool IsDeclaredNullable(ParameterInfo parameter)
+	{
+		if (Nullable.GetUnderlyingType(parameter.ParameterType) is not null)
+			return true;
+
+		if (parameter.ParameterType.IsValueType)
+			return false;
+
+		var own = NullableFlag(parameter.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
+
+		if (own is not null)
+			return own == 2;
+
+		var context = NullableFlag(parameter.Member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+		if (context is not null)
+			return context == 2;
+
+		for (var declaring = parameter.Member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
+		{
+			context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+			if (context is not null)
+				return context == 2;
+		}
+
+		return false;
+	}
+
+	/// <summary>
 	/// The first nullability flag carried by the named attribute: 2 for annotated
 	/// (nullable), 1 for not annotated, 0 for oblivious. The constructor takes either one
 	/// byte or an array whose first element describes the outermost type.

@@ -2,7 +2,7 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
-namespace Elastic.Esql.Tests.Translation.Projections;
+namespace Elastic.Esql.Tests.Translation.SelectProjection;
 
 /// <summary>
 /// Projections of the shape a GraphQL layer emits for a nested selection:
@@ -13,7 +13,7 @@ namespace Elastic.Esql.Tests.Translation.Projections;
 public class NullGuardedNestedProjectionTests : EsqlTestBase
 {
 	[Test]
-	public void NullGuardedNestedInit_ProjectsTheInnerField()
+	public void Select_NullGuardedNestedInit_ProjectsTheInnerField()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -31,7 +31,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardedChildOfAGuardedChild_IsUnwrappedTwice()
+	public void Select_GuardedChildOfAGuardedChild_IsUnwrappedTwice()
 	{
 		// the shape a selection two levels deep takes: the inner guard is null whenever
 		// its path is, and its path goes through the outer one
@@ -57,7 +57,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AnInnerGuardOnAnUnrelatedPath_IsRefused()
+	public void Select_InnerGuardOnAnUnrelatedPath_ThrowsNotSupported()
 	{
 		// the inner child is null when Agent is missing, not when Host is: the outer
 		// guard cannot be folded away
@@ -79,7 +79,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardIntoANonNullableMember_IsRefused()
+	public void Select_GuardIntoANonNullableMember_ThrowsNotSupported()
 	{
 		// with the guard dropped, a missing parent comes back as the member's default,
 		// which for a member with an initializer is an object rather than the null the
@@ -97,7 +97,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardIntoANonNullableConstructorParameter_IsRefused()
+	public void Select_GuardIntoANonNullableConstructorParameter_ThrowsNotSupported()
 	{
 		// the constructor's parameter stands for the member: declared non-nullable, it
 		// cannot hold the null the guard produces
@@ -111,7 +111,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardIntoANullableConstructorParameter_IsUnwrapped()
+	public void Select_GuardIntoANullableConstructorParameter_IsUnwrapped()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -122,7 +122,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void PlainNestedInit_StillWorks()
+	public void Select_PlainNestedInit_StillProjects()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -140,7 +140,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAnUnrelatedBranch_IsRefused()
+	public void Select_GuardOverAnUnrelatedBranch_ThrowsNotSupported()
 	{
 		// the guard tests Host, the branch reads Message: the two are unrelated, so the
 		// guard cannot be folded away, and the general conditional fallback renders the
@@ -155,7 +155,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAFunctionOfTheGuardedPath_IsUnwrapped()
+	public void Select_GuardOverAFunctionOfTheGuardedPath_IsUnwrapped()
 	{
 		// TRIM of a missing value is null, as every scalar function is over a null input,
 		// so the branch is null exactly when the guard says so and the guard can go
@@ -176,7 +176,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAParamsFunctionOfTheGuardedPath_IsUnwrapped()
+	public void Select_GuardOverAParamsFunctionOfTheGuardedPath_IsUnwrapped()
 	{
 		// the values of a params call sit in an array of their own; CONCAT is null over a
 		// null input like any other function, so the guard can go
@@ -197,7 +197,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAParamsFunctionOfConstantsOnly_IsRefused()
+	public void Select_GuardOverAParamsFunctionOfConstantsOnly_ThrowsNotSupported()
 	{
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -212,7 +212,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAFunctionThatAnswersNull_IsRefused()
+	public void Select_GuardOverAFunctionThatAnswersNull_ThrowsNotSupported()
 	{
 		// COALESCE gives a missing value a value of its own, so for a document with no
 		// Host the child would carry "x" where the source gives null
@@ -229,7 +229,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAnAnonymousChild_IsUnwrapped()
+	public void Select_GuardOverAnAnonymousChild_IsUnwrapped()
 	{
 		// an anonymous child is built with new rather than an initializer: its arguments
 		// are what has to read through the guarded path
@@ -246,7 +246,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAnAnonymousChildWithAConstant_IsRefused()
+	public void Select_GuardOverAnAnonymousChildWithAConstant_ThrowsNotSupported()
 	{
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -258,7 +258,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOnAProjectedValue_IsKeptUnlessTheBranchReadsThroughIt()
+	public void Select_GuardOnAProjectedValue_IsKeptUnlessTheBranchReadsThroughIt()
 	{
 		// after Select(n => n.Child) the parameter stands for the child, which may well be
 		// null: a constant child would be emitted for it, where the source gives null
@@ -273,7 +273,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOnAProjectedValueReadThrough_IsUnwrapped()
+	public void Select_GuardOnAProjectedValueReadThrough_IsUnwrapped()
 	{
 		var esql = CreateQuery<TreeNode>()
 			.From("nodes")
@@ -285,7 +285,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOnTheDocumentRow_StillTakesAConstantChild()
+	public void Select_GuardOnTheDocumentRow_StillTakesAConstantChild()
 	{
 		// the document row is never null, so the guard on it is no guard at all and the
 		// constant child is what the source gives
@@ -298,7 +298,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverASearchFunction_IsRefused()
+	public void Select_GuardOverASearchFunction_ThrowsNotSupported()
 	{
 		// MATCH answers a missing field with a definite no rather than null, so the guard
 		// cannot be dropped around it
@@ -312,7 +312,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAChildWithAConstructorArgument_IsRefused()
+	public void Select_GuardOverAChildWithAConstructorArgument_ThrowsNotSupported()
 	{
 		// the nested projection emits the bindings alone, never the constructor's
 		// arguments, so a child that takes any is not unwrapped, whatever they read
@@ -329,7 +329,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAChildWithAConstructorArgumentReadThrough_IsRefusedAllTheSame()
+	public void Select_GuardOverAChildWithAConstructorArgumentReadThrough_ThrowsAllTheSame()
 	{
 		var query = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -344,7 +344,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardedScalar_IntoANonNullableMember_IsRefused()
+	public void Select_GuardedScalarIntoANonNullableMember_ThrowsNotSupported()
 	{
 		// a guarded scalar is held to the same rule as a guarded child: with the guard
 		// dropped, a missing value comes back as the member's default, an empty string
@@ -359,7 +359,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardedScalar_IntoAMemberThatCanHoldNull_IsUnwrapped()
+	public void Select_GuardedScalarIntoAMemberThatCanHoldNull_IsUnwrapped()
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
@@ -375,7 +375,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAChildWithANestedInitializer_IsRefused()
+	public void Select_GuardOverAChildWithANestedInitializer_ThrowsNotSupported()
 	{
 		// "Geo = { City = ... }" is a binding that is not an assignment: nothing is read
 		// into it, so it cannot be said to read through the guarded path
@@ -392,7 +392,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAChildWithAConstantMember_IsRefused()
+	public void Select_GuardOverAChildWithAConstantMember_ThrowsNotSupported()
 	{
 		// one member reads through Host, the other is a constant: for a document with
 		// no Host the source gives null, where the constant would give a child with a
@@ -412,7 +412,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void AGuardOverAPurelyConstantChild_IsNotUnwrapped()
+	public void Select_GuardOverAPurelyConstantChild_IsNotUnwrapped()
 	{
 		// nothing in the child reads through Host, so dropping the guard would give the
 		// child a value for a document that has no Host at all
@@ -426,5 +426,57 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void Select_GuardOnTheRowParameterIntoANonNullableMember_StillProjects()
+	{
+		// the document row is never null, so a guard on the bare parameter is redundant
+		// rather than meaningful: dropping it changes nothing about what reaches the row,
+		// and the member's own nullability does not come into it
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new NestedSelectionDocument { Message = l == null ? null! : l.Message })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardOnTheRowParameterIntoANullableValueType_StillProjects()
+	{
+		// the target is a Nullable<int>, which holds the null a guard produces
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new OptionalCountProjection { Count = l == null ? (int?)null : l.StatusCode })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | RENAME statusCode AS count
+            | KEEP count
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardIntoANonNullableMemberWithAnInitializer_ThrowsNotSupported()
+	{
+		// the member is non-nullable and carries an initializer, so a missing parent
+		// comes back as that initial value rather than as the guard's null
+		var query = CreateQuery<NullableNestedModel>()
+			.From("logs-*")
+			.Select(l => new EagerNestedDocument
+			{
+				Host = l.Address == null ? null! : new NestedSelectionHost { Name = l.Address.City }
+			});
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
 	}
 }

@@ -15,6 +15,11 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
+[JsonSerializable(typeof(OptionalCountProjection))]
+[JsonSerializable(typeof(EagerNestedDocument))]
+[JsonSerializable(typeof(EagerHostRecord))]
+[JsonSerializable(typeof(LazyHostRecord))]
+[JsonSerializable(typeof(NestedSelectionHostWithTag))]
 [JsonSerializable(typeof(PrefixedCodeDocument))]
 [JsonSerializable(typeof(NullableNestedModel))]
 [JsonSerializable(typeof(AddressModel))]
@@ -78,6 +83,34 @@ public class PrefixedCodeDocument
 {
 	[JsonConverter(typeof(PrefixedCodeConverter))]
 	public string Code { get; set; } = string.Empty;
+}
+
+/// <summary>A document whose nested member is declared non-nullable, with an initializer.</summary>
+public class EagerNestedDocument
+{
+	public string Message { get; set; } = string.Empty;
+
+	public NestedSelectionHost Host { get; set; } = new();
+}
+
+/// <summary>A record whose constructor takes the nested child as non-nullable: it cannot hold a guard's null.</summary>
+public record EagerHostRecord(NestedSelectionHost Host);
+
+/// <summary>The same record with the child declared nullable, where a guard's null has a place to go.</summary>
+public record LazyHostRecord(NestedSelectionHost? Host);
+
+/// <summary>A nested child whose constructor takes a value, for the guard over a constructor argument.</summary>
+public class NestedSelectionHostWithTag(string tag)
+{
+	public string Tag { get; } = tag;
+
+	public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>Projection whose only member is a nullable value type, which holds a guard's null.</summary>
+public class OptionalCountProjection
+{
+	public int? Count { get; set; }
 }
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
@@ -340,14 +373,17 @@ public record CollisionRecord(string OuterMsg, string InnerMsg);
 public class NestedSelectionDocument
 {
 	public string Message { get; set; } = string.Empty;
-	public NestedSelectionHost Host { get; set; } = new();
-	public NestedSelectionAgent Agent { get; set; } = new();
+
+	public NestedSelectionHost? Host { get; set; }
+
+	public NestedSelectionAgent? Agent { get; set; }
 }
 
 public class NestedSelectionHost
 {
 	public string Name { get; set; } = string.Empty;
-	public NestedSelectionGeo Geo { get; set; } = new();
+
+	public NestedSelectionGeo? Geo { get; set; }
 }
 
 public class NestedSelectionAgent
