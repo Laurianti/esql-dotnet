@@ -28,19 +28,17 @@ public class StringOrderingTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_CompareOrdinalOnConvertedProperty_UsesTheSerializedForm()
+	public void Where_CompareOrdinalOnConvertedProperty_ThrowsNotSupported()
 	{
-		// the value is written the way the property is, as an equality would write it
-		var esql = CreateQuery<PrefixedCodeDocument>()
+		// the field holds what the converter writes, and a converter is free to write
+		// values in an order of its own, which the comparison would then report wrongly
+		var query = CreateQuery<PrefixedCodeDocument>()
 			.From("docs")
-			.Where(d => string.CompareOrdinal(d.Code, "42") > 0)
-			.ToString();
+			.Where(d => string.CompareOrdinal(d.Code, "42") > 0);
 
-		_ = esql.Should().Be(
-			"""
-            FROM docs
-            | WHERE code > "CODE-42"
-            """.NativeLineEndings());
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
 	}
 
 	[Test]
@@ -246,7 +244,7 @@ public class StringOrderingTests : EsqlTestBase
 		// it, whose value for a missing field is not the field's null
 		var query = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Where(l => string.Compare(EsqlFunctions.Trim(l.ClientIp), "m", StringComparison.Ordinal) < 0);
+			.Where(l => string.Compare(EsqlFunctions.Trim(l.ClientIp!), "m", StringComparison.Ordinal) < 0);
 
 		var act = () => query.ToString();
 
@@ -307,6 +305,52 @@ public class StringOrderingTests : EsqlTestBase
 			"""
             FROM docs
             | WHERE (clientIp IS NULL OR clientIp < "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_CompareAgainstTheProjectedRow_ThrowsNotSupported()
+	{
+		// a projected scalar row has no field name of its own, and emitting it would
+		// leave the operand empty
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.ClientIp)
+			.Where(s => string.Compare(s, "m", StringComparison.Ordinal) < 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*projected value*");
+	}
+
+	[Test]
+	public void Where_NullableFieldBehindAnAnonymousType_IsStillGuarded()
+	{
+		// an anonymous type carries no nullable annotation, and the column is the same
+		// column: a guard on one that is never null is a no-op, a missing one is not
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new { l.ClientIp, l.Message })
+			.Where(x => string.Compare(x.ClientIp, "m", StringComparison.Ordinal) < 0)
+			.ToString();
+
+		_ = esql.Should().Contain("(clientIp IS NULL OR clientIp < \"m\")");
+	}
+
+	[Test]
+	public void Where_CompareOrdinalAgainstACapturedZero_TranslatesAsAgainstTheLiteral()
+	{
+		var zero = 0;
+
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, "m") > zero)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message > "m"
             """.NativeLineEndings());
 	}
 }

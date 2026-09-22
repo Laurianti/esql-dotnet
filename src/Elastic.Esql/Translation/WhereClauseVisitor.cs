@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information
 
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -915,8 +916,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// in U+E000 to U+FFFF. A comparison is decided by the first character that differs,
 	/// so when the value compared against holds neither a supplementary character nor
 	/// one at or above U+E000, no such pair can arise, whatever the field holds, and the
-	/// translation is exact. Only that case is translated; a value outside it, or two
-	/// fields compared with each other, is refused rather than ordered wrongly.
+	/// translation is exact. Only that case is translated; a value outside it, two fields
+	/// compared with each other, the projected row, and a property whose converter writes
+	/// the field in an order of its own, are refused rather than ordered wrongly.
 	/// </para>
 	/// </summary>
 	private bool TryVisitStringComparison(BinaryExpression node)
@@ -929,7 +931,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			? (left, node.Right, false)
 			: node.Right is MethodCallExpression right ? (right, node.Left, true) : (null, null, false);
 
-		if (call is null || zero is not ConstantExpression { Value: 0 })
+		if (call is null || !TryGetConstant(zero!, out var zeroValue) || zeroValue is not 0)
 			return false;
 
 		if (call.Method.DeclaringType != typeof(string)
@@ -994,55 +996,57 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Only <see cref="StringComparison.Ordinal"/> does: keyword ordering is
 	/// case-sensitive, so OrdinalIgnoreCase would order "a" and "B" the other way.
 	/// <para>
-	/// This is the ordering comparison, which a binary node carries, so it is checked
-	/// here rather than where a string method call is visited: the comparison against
-	/// zero is folded away before the call itself is reached.
+	/// The instance methods carry their own check, on the path that visits a string method
+	/// call. This one is for the static ordering forms, which are read here, inside the
+	/// comparison against zero, and never reach that path.
 	/// </para>
 	/// </summary>
-	private static bool IsOrdinalComparison(Expression expression)
+	private static bool IsOrdinalComparison(Expression expression) =>
+		TryGetConstant(expression, out var mode) && mode is StringComparison.Ordinal;
+
+	/// <summary>
+	/// Whether the operand reads a field of the document rather than a value: the question
+	/// is whether it depends on the lambda parameter, whatever its shape, since a function
+	/// of a captured value is a value all the same.
+	/// </summary>
+	private static bool ReadsAField(Expression expression)
 	{
-		try
+		var finder = new ParameterFinder();
+		_ = finder.Visit(expression);
+		return finder.Found;
+	}
+
+	/// <summary>Finds the lambda parameter anywhere in an expression.</summary>
+	private sealed class ParameterFinder : ExpressionVisitor
+	{
+		public bool Found { get; private set; }
+
+		protected override Expression VisitParameter(ParameterExpression node)
 		{
-			return GetConstantValue(expression) is StringComparison.Ordinal;
-		}
-		catch (NotSupportedException)
-		{
-			return false;
+			Found = true;
+			return base.VisitParameter(node);
 		}
 	}
 
 	/// <summary>
-	/// Whether the operand is null: the null literal, or a captured variable holding it.
-	/// A field is not one, since its value is not known here.
+	/// Refuses the operands whose ordering the translation cannot reproduce: the row
+	/// itself, a null operand, two fields with no value to look at, and a value holding a
+	/// character on which the UTF-16 and UTF-8 orderings can disagree.
 	/// </summary>
-	private static bool IsNullOperand(Expression expression)
+	private void EnsureOrderingIsExact(string methodName, Expression first, Expression second)
 	{
-		if (IsNullConstant(expression))
-			return true;
-
-		if (expression is not (MemberExpression or UnaryExpression { NodeType: ExpressionType.Convert }))
-			return false;
-
-		try
+		// a projected scalar row has no field name of its own to compare, and emitting it
+		// leaves the operand empty
+		if (first.UnwrapConvertExpressions() is ParameterExpression || second.UnwrapConvertExpressions() is ParameterExpression)
 		{
-			return GetConstantValue(expression) is null;
+			throw new NotSupportedException(
+				$"String method {methodName} against a projected value is not supported: compare "
+				+ "the document field instead, before the projection.");
 		}
-		catch (NotSupportedException)
-		{
-			return false;
-		}
-	}
 
-	/// <summary>
-	/// Refuses the operands whose ordering the translation cannot reproduce: a null
-	/// operand, two fields with no value to look at, and a value holding a character on
-	/// which the UTF-16 and UTF-8 orderings can disagree.
-	/// </summary>
-	private static void EnsureOrderingIsExact(string methodName, Expression first, Expression second)
-	{
 		// .NET orders a non-null string above null, which a plain ES|QL comparison
 		// against null does not reproduce; there is a field to test for null instead
-		if (IsNullOperand(first) || IsNullOperand(second))
+		if (ResolvesToNull(first) || ResolvesToNull(second))
 		{
 			throw new NotSupportedException(
 				$"String method {methodName} against null is not supported: compare the "
@@ -1058,10 +1062,18 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (value is not string text)
 		{
-			throw new NotSupportedException(
-				$"String method {methodName} between two fields is not supported: without a "
-				+ "value to look at, the translation cannot tell whether the UTF-16 ordering of .NET "
-				+ "and the UTF-8 ordering of Elasticsearch agree on the comparison.");
+			// a side that reads no field is a value all the same, even where the resolver
+			// cannot fold it, so it is refused for what it is rather than as a field
+			var valueSide = !ReadsAField(first) || !ReadsAField(second);
+
+			throw new NotSupportedException(valueSide
+				? $"String method {methodName} against a value the translation cannot read is not "
+					+ "supported: without the value it cannot tell whether the UTF-16 ordering of .NET "
+					+ "and the UTF-8 ordering of Elasticsearch agree on the comparison. Compute the "
+					+ "value before the query and compare against the result."
+				: $"String method {methodName} between two fields is not supported: without a "
+					+ "value to look at, the translation cannot tell whether the UTF-16 ordering of .NET "
+					+ "and the UTF-8 ordering of Elasticsearch agree on the comparison.");
 		}
 
 		if (text.Any(character => char.IsSurrogate(character) || character >= '\uE000'))
@@ -1072,6 +1084,36 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ "the UTF-16 ordering of .NET and the UTF-8 ordering of Elasticsearch can disagree, "
 				+ "so the comparison is left untranslated rather than answered with the wrong order.");
 		}
+
+		// The field holds what the converter writes, and the value is emitted through it
+		// too, so the order Elasticsearch applies is the order of the written forms. A
+		// converter is free not to preserve the order of the values it is given, and the
+		// check above reads the value as written in the source, so neither it nor that
+		// order carries over to what the field actually holds.
+		if (_context.Metadata.FindPropertyConverter(ConvertedMember(first) ?? ConvertedMember(second)) is not null)
+		{
+			throw new NotSupportedException(
+				$"String method {methodName} on a property with a JsonConverter is not supported: "
+				+ "the field holds what the converter writes, which need not be ordered the way the "
+				+ "values it is given are, so the ordering of the two sides cannot be reproduced.");
+		}
+	}
+
+	/// <summary>
+	/// The member an operand reads, looked for through the calls wrapped around it: a
+	/// MultiField or a scalar function still reads the field the converter writes, so the
+	/// ordering of the written forms is the one that decides the comparison.
+	/// </summary>
+	private static MemberInfo? ConvertedMember(Expression expression)
+	{
+		if (EntityPropertyMember(expression) is { } direct)
+			return direct;
+
+		return expression.UnwrapConvertExpressions() is MethodCallExpression call
+			? new[] { call.Object }.Concat(call.Arguments).FirstOrDefault(a => a is not null && ConvertedMember(a) is not null) is { } found
+				? ConvertedMember(found)
+				: null
+			: null;
 	}
 
 	/// <summary>
@@ -1139,9 +1181,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!ExpressionTranslationHelpers.IsRootedInParameter(member))
 			return false;
 
-		for (Expression? current = member; current is MemberExpression step; current = step.Expression)
+		// the chain is walked through the conversions a cast leaves on it, as
+		// IsRootedInParameter and ResolveMemberFieldPath do
+		for (Expression? current = member; current is MemberExpression step; current = step.Expression?.UnwrapConvertExpressions())
 		{
-			if (IsDeclaredNullable(step.Member))
+			if (CanBeMissing(step.Member))
 				return true;
 		}
 
@@ -1170,18 +1214,20 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// Whether the member is declared nullable: a <c>Nullable&lt;T&gt;</c>, or a reference
-	/// annotated as nullable. Only then is the guard worth writing: on a non-nullable
-	/// member the comparison already reads the way the source does.
-	/// <para>
-	/// The compiler records the annotation as a <c>NullableAttribute</c> on the member, or
-	/// omits it and records a <c>NullableContextAttribute</c> on the declaring type when
-	/// every member shares the same annotation. Both are read from the attribute data
-	/// rather than by instantiating the attribute, which keeps the check out of the
-	/// trimmer's way.
-	/// </para>
+	/// The answer for a member, which never changes: the compiler records the annotation
+	/// once, and reading it walks the member's attribute data and its declaring types.
 	/// </summary>
-	internal static bool IsDeclaredNullable(MemberInfo member)
+	private static readonly ConcurrentDictionary<MemberInfo, bool> MissingByMember = new();
+
+	/// <summary>
+	/// Whether a guard belongs on the member: everything except one the compiler states is
+	/// never null. A guard on a column that is never null is a no-op, while a missing one
+	/// changes the rows, so an unannotated member, as an anonymous type's is, is guarded.
+	/// </summary>
+	private static bool CanBeMissing(MemberInfo member) =>
+		MissingByMember.GetOrAdd(member, ComputeCanBeMissing);
+
+	private static bool ComputeCanBeMissing(MemberInfo member)
 	{
 		var type = member switch
 		{
@@ -1191,7 +1237,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		};
 
 		if (type is null)
-			return false;
+			return true;
 
 		if (Nullable.GetUnderlyingType(type) is not null)
 			return true;
@@ -1202,18 +1248,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var own = NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
 
 		if (own is not null)
-			return own == 2;
+			return own != 1;
 
 		for (var declaring = member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
 		{
 			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
 
 			if (context is not null)
-				return context == 2;
+				return context != 1;
 		}
 
-		return false;
+		return true;
 	}
+
 
 	/// <summary>
 	/// The first nullability flag carried by the named attribute: 2 for annotated
@@ -1243,8 +1290,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			value = GetConstantValue(expression);
 			return value is not null;
 		}
-		catch (NotSupportedException)
+		catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or TargetInvocationException)
 		{
+			// the same filter the resolver's own callers use: a value that cannot be read
+			// is not a constant, anything else is a real bug and propagates
 			value = null;
 			return false;
 		}

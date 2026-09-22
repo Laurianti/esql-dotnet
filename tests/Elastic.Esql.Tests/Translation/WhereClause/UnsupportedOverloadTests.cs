@@ -2,6 +2,8 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using Elastic.Esql.Functions;
+
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
@@ -21,7 +23,7 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*StringComparison.Ordinal*");
 	}
 
 	[Test]
@@ -126,7 +128,7 @@ public class UnsupportedOverloadTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*StringComparison.Ordinal*");
 	}
 
 	[Test]
@@ -165,5 +167,49 @@ public class UnsupportedOverloadTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*IS NULL*");
+	}
+
+	[Test]
+	public void Where_CompareBetweenAFieldExpressionAndAField_NamesTheTwoFields()
+	{
+		// both sides read a field, one through a function: there is no value to look at,
+		// so the refusal is the two-fields one rather than the unreadable-value one
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(EsqlFunctions.Trim(l.Message), l.ClientIp!) > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*between two fields*");
+	}
+
+	[Test]
+	public void Where_CompareAgainstAComputedValue_NamesTheUnreadableValue()
+	{
+		// a function of a captured value is a value all the same, whatever its shape, so
+		// it is refused for what it is rather than as a second field
+		var prefix = "m";
+
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => string.CompareOrdinal(l.Message, prefix + "x") > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*cannot read*");
+	}
+
+	[Test]
+	public void Where_CompareOrdinalOnAConvertedPropertyBehindAMultiField_ThrowsNotSupported()
+	{
+		// the sub-field holds what the converter writes just as the field does, so the
+		// refusal has to look through the call rather than only at a bare member
+		var query = CreateQuery<PrefixedCodeDocument>()
+			.From("docs")
+			.Where(d => string.CompareOrdinal(d.Code.MultiField("keyword"), "42") > 0);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
 	}
 }
