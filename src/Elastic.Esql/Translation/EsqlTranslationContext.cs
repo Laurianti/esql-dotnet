@@ -26,6 +26,12 @@ internal sealed class EsqlTranslationContext
 	public List<QueryCommand> Commands { get; } = [];
 
 	/// <summary>
+	/// Whether a Select has replaced the rows with something built from them. Keep and
+	/// Drop narrow the columns but leave the row itself, so they do not set this.
+	/// </summary>
+	public bool HasProjected { get; set; }
+
+	/// <summary>
 	/// Named-parameter accumulator. Settable internally so sub-pipeline visitors (e.g. FORK
 	/// branches) can share the parent's instance and avoid losing parameters at branch boundaries.
 	/// </summary>

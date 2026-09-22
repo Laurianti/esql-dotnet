@@ -134,4 +134,20 @@ public class StringMethodTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>()
 			.WithMessage("*StringComparison*");
 	}
+
+	[Test]
+	public void Where_StringEndsWith_WithQuote_EscapesTheLiteralOnly()
+	{
+		// a quote is nothing to LIKE, so only the string literal escapes it
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.EndsWith("say \"hi\""))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE message LIKE "*say \"hi\""
+            """.NativeLineEndings());
+	}
 }

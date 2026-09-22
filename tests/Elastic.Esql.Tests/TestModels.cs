@@ -13,6 +13,7 @@ namespace Elastic.Esql.Tests;
 // ============================================================================
 
 [JsonSerializable(typeof(LogEntry))]
+[JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(SimpleDocument))]
 [JsonSerializable(typeof(MetricDocument))]
 [JsonSerializable(typeof(EventDocument))]
@@ -38,6 +39,14 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(SpecialCharacterProjection))]
 [JsonSerializable(typeof(ColumnNameEscapingTests.EqualsSignTarget))]
 public sealed partial class EsqlTestMappingContext : JsonSerializerContext;
+
+/// <summary>A recursive document: a node whose child is a node, so a projection to the child keeps the type.</summary>
+public class TreeNode
+{
+	public string Name { get; set; } = string.Empty;
+
+	public TreeNode? Child { get; set; }
+}
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
 public class BookDocument

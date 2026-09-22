@@ -53,6 +53,7 @@ internal sealed class ForkFuseTranslator(EsqlQueryProvider provider, EsqlTransla
 				throw new NotSupportedException($"Fork branch {i + 1} must be a lambda expression.");
 
 			var branch = ForkBranchVisitor.Translate(_provider, branchLambda, elementType, inheritedMetadata, inlineParameters: inlineParameters, _context);
+			_context.HasProjected |= branch.HasProjected;
 			if (branch.Fragments.Count == 0)
 				throw new NotSupportedException($"Fork branch {i + 1} produced no commands.");
 
