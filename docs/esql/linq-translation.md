@@ -97,7 +97,10 @@ FROM logs-*
 ```csharp
 .Where(l => l.Tag == null)             // WHERE tag IS NULL
 .Where(l => l.Tag != null)             // WHERE tag IS NOT NULL
+.Where(l => l != null && l.Tag != null) // WHERE (TRUE AND tag IS NOT NULL)
 ```
+
+A null check on the document itself, which generated predicates often carry, is a constant: a document is never null. After a `Select` the parameter stands for the projected value, which can be null, so there such a check is refused rather than folded.
 
 ### Compound conditions
 

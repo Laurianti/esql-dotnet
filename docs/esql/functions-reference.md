@@ -215,6 +215,8 @@ C# string methods translate to ES|QL string functions. `Contains`, `StartsWith`,
 // WHERE host LIKE "prod-*" AND TO_LOWER(message) LIKE "*timeout*"
 ```
 
+A `*`, `?` or backslash in the value is escaped for the pattern, so it matches the text rather than acting as a wildcard: `Contains("a*b")` becomes `LIKE "*a\\*b*"`.
+
 | ES\|QL | `EsqlFunctions` | C# native |
 |---|---|---|
 | [`BIT_LENGTH`](elasticsearch://reference/query-languages/esql/functions-operators/string-functions.md#esql-bit_length) | `EsqlFunctions.BitLength(s)` | |
