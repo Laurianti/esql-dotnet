@@ -2,6 +2,9 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Linq.Expressions;
+using Elastic.Esql.Functions;
+
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 public class NullCheckTests : EsqlTestBase
@@ -49,7 +52,7 @@ public class NullCheckTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE (TRUE AND clientIp IS NOT NULL)
+            | WHERE (true AND clientIp IS NOT NULL)
             """.NativeLineEndings());
 	}
 
@@ -64,7 +67,7 @@ public class NullCheckTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE FALSE
+            | WHERE false
             """.NativeLineEndings());
 	}
 
@@ -80,7 +83,7 @@ public class NullCheckTests : EsqlTestBase
 			.Where(l => l != null)
 			.ToString();
 
-		_ = esql.Should().Contain("WHERE TRUE");
+		_ = esql.Should().Contain("WHERE true");
 	}
 
 	[Test]
@@ -95,7 +98,7 @@ public class NullCheckTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*projected value*");
 	}
 
 	[Test]
@@ -112,7 +115,57 @@ public class NullCheckTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE TRUE
+            | WHERE true
             """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_NullGuardBehindACast_StillFolds()
+	{
+		// a hand-built tree converts the row to object so the operands of the comparison
+		// have matching types; the guard is the same guard
+		var parameter = Expression.Parameter(typeof(LogEntry), "l");
+		var guard = Expression.Lambda<Func<LogEntry, bool>>(
+			Expression.NotEqual(
+				Expression.Convert(parameter, typeof(object)),
+				Expression.Constant(null, typeof(object))),
+			parameter);
+
+		var esql = CreateQuery<LogEntry>().From("logs-*").Where(guard).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE true
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AfterAProjectingForkBranch_TheRowIsProjected()
+	{
+		// the branch projects, so the rows that follow the Fork are projected too and the
+		// guard is refused rather than folded into a constant that would drop every row
+		var query = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Fork(b => b.Select(n => n.Child).Take(1), b => b.Take(1))
+			.Where(n => n == null);
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*projected value*");
+	}
+
+	[Test]
+	public void Where_EsqlFunctionsIsNotNullOnTheRow_ThrowsNotSupported()
+	{
+		// the marker takes the field to test; the row has no field name of its own, and
+		// emitting it leaves the operator with nothing in front of it
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => EsqlFunctions.IsNotNull(l));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*row has no field name*");
 	}
 }

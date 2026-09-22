@@ -40,13 +40,13 @@ internal static class ForkBranchVisitor
 		visitor.Context.ElementType = elementType;
 		visitor.Context.ActiveMetadata = inheritedMetadata;
 		visitor.Context.InsideForkBranch = true;
+		// a branch starts from whatever the parent had built: if the rows were already
+		// projected there, they are projected in the branch too
+		visitor.Context.HasProjected = parentContext.HasProjected;
 
 		// Share the parent's parameter accumulator so closure-captured values inside branches
 		// land in the final params payload (and uniquely-suffixed names are reserved across branches).
 		visitor.Context.Parameters = parentContext.Parameters;
-		// a branch starts from whatever the parent had built: if the rows were already
-		// projected there, they are projected in the branch too
-		visitor.Context.HasProjected = parentContext.HasProjected;
 
 		var query = visitor.Translate(rewrittenBody);
 
@@ -69,7 +69,8 @@ internal static class ForkBranchVisitor
 			_ => false
 		});
 
-		return new ForkBranch(fragments, hasLimit: hasLimit);
+		// a branch that projects leaves the rows projected for whatever follows the Fork
+		return new ForkBranch(fragments, hasLimit: hasLimit, hasProjected: visitor.Context.HasProjected);
 	}
 
 	// ES|QL keywords are case-insensitive and any whitespace may follow them, so a raw "limit 10" or

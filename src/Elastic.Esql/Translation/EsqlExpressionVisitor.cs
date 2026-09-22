@@ -290,12 +290,12 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				_pendingGroupByKeySelector = null;
 				_pendingGroupByElementSelector = null;
 				ClearMetadataAfterStats();
-				Context.HasProjected = true;
 				return;
 			}
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
 			var result = projectionVisitor.Translate(lambda);
+
 			// From here the rows are whatever the selector built, not the document, unless
 			// the selector hands the row back as it is: an identity Select projects nothing
 			// of its own and leaves the document where it was. Raised after the translation,

@@ -436,7 +436,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		// Check for EsqlFunctions marker methods
 		if (declaringType == typeof(EsqlFunctions))
+		{
+			// IsNull and IsNotNull take the field to test, and the row is not one: it has
+			// no field name to put in front of the operator, so the marker would emit the
+			// operator with nothing before it.
+			if (methodName is nameof(EsqlFunctions.IsNull) or nameof(EsqlFunctions.IsNotNull)
+				&& node.Arguments is [{ } only]
+				&& only.UnwrapConvertExpressions() is ParameterExpression)
+			{
+				throw new NotSupportedException(
+					$"EsqlFunctions.{methodName} on the row itself is not supported: pass the field "
+					+ "to test, since the row has no field name of its own to put in front of the operator.");
+			}
+
 			return VisitEsqlFunction(node);
+		}
 
 		// String methods
 		if (declaringType == typeof(string))
@@ -850,19 +864,20 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ "document field instead, before the projection.");
 		}
 
-		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "FALSE" : "TRUE");
+		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "false" : "true");
 		return true;
 	}
 
-	/// <summary>Whether the parameter stands for the document row rather than a projected value.</summary>
+	/// <summary>
+	/// Whether the parameter stands for the document row rather than a projected value.
+	/// Matching the element type is not enough: a recursive type projects to itself, as in
+	/// ".Select(n => n.Child)" over "Node.Child : Node?", and the projected value may well
+	/// be null. Keep and Drop narrow the columns but leave the row, so the question is
+	/// whether a Select has run, not which commands were emitted. The element type is a
+	/// document type and is set before any Where runs, so it alone decides the first half.
+	/// </summary>
 	private bool IsDocumentParameter(ParameterExpression parameter) =>
-		!parameter.Type.IsValueType
-		&& parameter.Type != typeof(string)
-		&& (_context.ElementType is null || parameter.Type == _context.ElementType)
-		// Matching the element type is not enough: a recursive type projects to itself,
-		// as in ".Select(n => n.Child)" over "Node.Child : Node?", and the projected
-		// value may well be null. Keep and Drop narrow the columns but leave the row,
-		// so the question is whether a Select has run, not which commands were emitted.
+		parameter.Type.IsAssignableFrom(_context.ElementType)
 		&& !_context.HasProjected;
 
 	private static string EscapeLikePattern(string value) =>
