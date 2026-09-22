@@ -17,9 +17,46 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | EVAL sub = SUBSTRING(message, 5)
+            | EVAL sub = SUBSTRING(message, 6)
             | KEEP sub
             """.NativeLineEndings());
+	}
+
+	[Test]
+	public void String_Substring_MaxValueStartIndex_ThrowsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new { Sub = l.Message.Substring(int.MaxValue) })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*int.MaxValue*");
+	}
+
+	[Test]
+	public void String_Indexer_CapturedMaxValueIndex_ThrowsNotSupported()
+	{
+		var index = int.MaxValue;
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new { Ch = l.Message[index] })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*int.MaxValue*");
+	}
+
+	[Test]
+	public void String_Substring_CapturedNegativeStartIndex_ThrowsNotSupported()
+	{
+		var start = -1;
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new { Sub = l.Message.Substring(start) })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*-1*non-negative*");
 	}
 
 	[Test]
@@ -33,7 +70,7 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | EVAL sub = SUBSTRING(message, 0, 10)
+            | EVAL sub = SUBSTRING(message, 1, 10)
             | KEEP sub
             """.NativeLineEndings());
 	}
@@ -82,7 +119,7 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE SUBSTRING(message.keyword, 0, 1) == "E"
+            | WHERE SUBSTRING(message.keyword, 1, 1) == "E"
             """.NativeLineEndings());
 	}
 
@@ -98,7 +135,7 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE SUBSTRING(message.keyword, 3, 1) == "O"
+            | WHERE SUBSTRING(message.keyword, 4, 1) == "O"
             """.NativeLineEndings());
 	}
 
@@ -113,7 +150,7 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE SUBSTRING(message.keyword, 0, 5) == "ERROR"
+            | WHERE SUBSTRING(message.keyword, 1, 5) == "ERROR"
             """.NativeLineEndings());
 	}
 
@@ -128,7 +165,48 @@ public class StringIndexTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM logs-*
-            | WHERE SUBSTRING(message.keyword, 0, 4) == "INFO"
+            | WHERE SUBSTRING(message.keyword, 1, 4) == "INFO"
             """.NativeLineEndings());
+	}
+
+	[Test]
+	public void String_Substring_CapturedStartIndex_InWhere_FoldsOneBasedStart()
+	{
+		var start = 3;
+
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.MultiField("keyword").Substring(start, 1) == "O")
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | WHERE SUBSTRING(message.keyword, 4, 1) == "O"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void String_Substring_FieldStartIndex_InWhere_EmitsShiftedExpression()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.MultiField("keyword").Substring(l.StatusCode, 1) == "O")
+			.ToString();
+
+		_ = esql.Should().Contain("SUBSTRING(message.keyword, (statusCode) + 1, 1)");
+	}
+
+	[Test]
+	public void String_Substring_CapturedStartIndex_Parameterized_FoldsToLiteral()
+	{
+		var start = 3;
+
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Where(l => l.Message.MultiField("keyword").Substring(start, 1) == "O")
+			.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Contain("SUBSTRING(message.keyword, 4, 1)");
 	}
 }

@@ -31,7 +31,9 @@ internal sealed class EsqlTranslationContext
 	/// </summary>
 	public EsqlParameters Parameters { get; internal set; } = new();
 
-	public object? QueryOptions { get; set; }
+	public EsqlQueryOptions? QueryOptions { get; set; }
+
+	public object? ExecutorOptions { get; set; }
 
 	/// <summary>
 	/// Document metadata fields that are currently in scope (either requested via
@@ -81,12 +83,15 @@ internal sealed class EsqlTranslationContext
 	/// <summary>
 	/// Resolves a field name from a declaring type and member, handling anonymous types
 	/// by applying <see cref="JsonSerializerOptions.PropertyNamingPolicy"/> instead of
-	/// looking up registered type metadata.
+	/// looking up registered type metadata. The returned name is ES|QL-escaped via
+	/// <see cref="EsqlIdentifier.EscapeColumnName"/>.
 	/// </summary>
 	public string ResolveFieldName(Type declaringType, MemberInfo member) =>
-		declaringType.IsDefined(typeof(CompilerGeneratedAttribute), false)
-			? SerializerOptions.PropertyNamingPolicy?.ConvertName(member.Name) ?? member.Name
-			: Metadata.ResolvePropertyName(declaringType, member);
+		EsqlIdentifier.EscapeColumnName(
+			declaringType.IsDefined(typeof(CompilerGeneratedAttribute), false)
+				? SerializerOptions.PropertyNamingPolicy?.ConvertName(member.Name) ?? member.Name
+				: Metadata.ResolvePropertyName(declaringType, member)
+		);
 
 	/// <summary>
 	/// Registers the resolved field names for an anonymous type, extracted from a <see cref="NewExpression"/>.
@@ -113,7 +118,13 @@ internal sealed class EsqlTranslationContext
 		if (_anonymousTypeFields is not null && _anonymousTypeFields.TryGetValue(type, out var tracked))
 			return tracked;
 
-		return Metadata.GetAllPropertyNames(type);
+		// Callers compare these names against translator-resolved (escaped) column paths,
+		// so apply the same escaping here. Anonymous-type sets are already stored escaped.
+		var names = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var name in Metadata.GetAllPropertyNames(type))
+			_ = names.Add(EsqlIdentifier.EscapeColumnName(name));
+
+		return names;
 	}
 
 	/// <summary>
@@ -151,17 +162,56 @@ internal sealed class EsqlTranslationContext
 	[UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Serialization delegates to the user-provided JsonSerializerOptions/JsonSerializerContext which is expected to include an AOT-safe TypeInfoResolver.")]
 	private JsonElement SerializeToElement(object? value, MemberInfo? propertyContext = null)
 	{
-		value = value switch
-		{
-			float f when float.IsNaN(f) || float.IsInfinity(f) => null,
-			double d when double.IsNaN(d) || double.IsInfinity(d) => null,
-			TimeSpan ts => EsqlFormatting.FormatTimeSpanRaw(ts),
-			_ => value
-		};
-
+		// A property-level converter receives the original value; the duration literal is only the default for members without one.
 		if (value is not null && Metadata.FindPropertyConverter(propertyContext) is { } converter)
 			return JsonSerializer.SerializeToElement(value, value.GetType(), Metadata.GetOptionsWithConverter(converter));
 
+		if (value is TimeSpan ts)
+			value = EsqlFormatting.FormatTimeSpanRaw(ts);
+
+		// STJ renders whole doubles without a decimal point (100.0 -> 100), which ES types as an
+		// integer parameter and integer division truncates. Parse the explicit literal instead, unless
+		// a converter registered on the options claims the type: its output must win.
+		if (value is double doubleValue && !HasRegisteredConverter(typeof(double)))
+			return ParseRawJson(EsqlFormatting.FormatDouble(doubleValue));
+		if (value is float floatValue && !HasRegisteredConverter(typeof(float)))
+			return ParseRawJson(EsqlFormatting.FormatFloat(floatValue));
+
+		// The same integer-typing hazard applies element-wise to captured numeric collections; nullable
+		// element types are separate interfaces and keep their null entries.
+		if (value is IEnumerable<double> doubles && UsesDefaultNumericSerialization(typeof(double), value))
+			return ParseRawJson($"[{string.Join(",", doubles.Select(EsqlFormatting.FormatDouble))}]");
+		if (value is IEnumerable<float> floats && UsesDefaultNumericSerialization(typeof(float), value))
+			return ParseRawJson($"[{string.Join(",", floats.Select(EsqlFormatting.FormatFloat))}]");
+		if (value is IEnumerable<double?> nullableDoubles && UsesDefaultNumericSerialization(typeof(double?), value))
+			return ParseRawJson($"[{string.Join(",", nullableDoubles.Select(d => d is { } present ? EsqlFormatting.FormatDouble(present) : "null"))}]");
+		if (value is IEnumerable<float?> nullableFloats && UsesDefaultNumericSerialization(typeof(float?), value))
+			return ParseRawJson($"[{string.Join(",", nullableFloats.Select(f => f is { } present ? EsqlFormatting.FormatFloat(present) : "null"))}]");
+
 		return JsonSerializer.SerializeToElement(value, value?.GetType() ?? typeof(object), SerializerOptions);
+	}
+
+	private bool UsesDefaultNumericSerialization(Type elementType, object collection) =>
+		!HasRegisteredConverter(elementType)
+		&& (Nullable.GetUnderlyingType(elementType) is not { } underlying || !HasRegisteredConverter(underlying))
+		&& !HasRegisteredConverter(collection.GetType());
+
+	// Only converters the user registered on the options count; the resolver's built-in converters are
+	// exactly what the explicit-decimal fast path stands in for.
+	private bool HasRegisteredConverter(Type type)
+	{
+		foreach (var converter in SerializerOptions.Converters)
+		{
+			if (converter.CanConvert(type))
+				return true;
+		}
+
+		return false;
+	}
+
+	private static JsonElement ParseRawJson(string json)
+	{
+		using var document = JsonDocument.Parse(json);
+		return document.RootElement.Clone();
 	}
 }

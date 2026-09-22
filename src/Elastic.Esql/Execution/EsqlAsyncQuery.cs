@@ -22,7 +22,7 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 	private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(100);
 	private readonly IEsqlQueryExecutor _executor;
 	private readonly EsqlResponseReader _reader;
-	private readonly object? _queryOptions;
+	private readonly EsqlExecutionRequest _request;
 	private EsqlAsyncResults<T>? _asyncResult;
 	private EsqlResults<T>? _syncResult;
 	private IAsyncDisposable? _ownedAsyncResponse;
@@ -35,15 +35,15 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 		EsqlAsyncResults<T> result,
 		IEsqlAsyncResponse response,
 		EsqlResponseReader reader,
-		object? queryOptions)
+		EsqlExecutionRequest request)
 	{
 		_executor = executor;
 		_asyncResult = result;
 		_ownedAsyncResponse = response;
 		_reader = reader;
-		_queryOptions = queryOptions;
+		_request = request;
 
-		QueryId = result.Id;
+		QueryId = result.Id ?? ReadAsyncIdHeader(response);
 		IsCompleted = result.IsRunning != true;
 	}
 
@@ -53,15 +53,15 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 		EsqlResults<T> result,
 		IEsqlResponse response,
 		EsqlResponseReader reader,
-		object? queryOptions)
+		EsqlExecutionRequest request)
 	{
 		_executor = executor;
 		_syncResult = result;
 		_ownedSyncResponse = response;
 		_reader = reader;
-		_queryOptions = queryOptions;
+		_request = request;
 
-		QueryId = result.Id;
+		QueryId = result.Id ?? ReadAsyncIdHeader(response);
 		IsCompleted = result.IsRunning != true;
 	}
 
@@ -79,6 +79,11 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 	/// Calls <see cref="WaitForCompletionAsync"/> internally before returning rows.
 	/// Each response's rows can only be consumed once (the underlying stream is single-read).
 	/// </summary>
+	/// <remarks>
+	/// When the query id arrives only in the trailing response body, it is captured after the rows
+	/// have been fully enumerated. Terminating enumeration early (e.g. via <c>Take</c> or <c>break</c>)
+	/// can therefore leave the server-side query undeleted on dispose.
+	/// </remarks>
 	public async IAsyncEnumerable<T> AsAsyncEnumerable([EnumeratorCancellation] CancellationToken cancellationToken = default)
 	{
 		if (!IsCompleted)
@@ -92,6 +97,8 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 
 		await foreach (var item in source.WithCancellation(cancellationToken).ConfigureAwait(false))
 			yield return item;
+
+		SyncQueryIdFromResults();
 	}
 
 	/// <summary>
@@ -99,18 +106,35 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 	/// Calls <see cref="WaitForCompletion"/> internally before returning rows.
 	/// Each response's rows can only be consumed once (the underlying stream is single-read).
 	/// </summary>
+	/// <remarks>
+	/// When the query was submitted asynchronously, enumeration bridges async reads onto the calling thread
+	/// via the thread pool. Prefer <see cref="AsAsyncEnumerable"/> with <c>await foreach</c>.
+	/// <para>
+	/// When the query id arrives only in the trailing response body, it is captured after the rows
+	/// have been fully enumerated. Terminating enumeration early (e.g. via <c>Take</c> or <c>break</c>)
+	/// can therefore leave the server-side query undeleted on dispose.
+	/// </para>
+	/// </remarks>
 	public IEnumerable<T> AsEnumerable()
 	{
 		if (!IsCompleted)
 			WaitForCompletion();
 
 		if (_syncResult is not null)
-			return _syncResult.Rows;
+			return EnumerateThenSyncQueryId(_syncResult.Rows);
 
 		if (_asyncResult is not null)
-			return new AsyncToSyncEnumerable(_asyncResult.Rows);
+			return EnumerateThenSyncQueryId(new AsyncToSyncEnumerable(_asyncResult.Rows));
 
 		return [];
+	}
+
+	private IEnumerable<T> EnumerateThenSyncQueryId(IEnumerable<T> rows)
+	{
+		foreach (var item in rows)
+			yield return item;
+
+		SyncQueryIdFromResults();
 	}
 
 	/// <summary>
@@ -124,11 +148,9 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 		if (QueryId is null)
 			throw new InvalidOperationException("Cannot refresh an async query without a query ID.");
 
-		var response = await _executor.PollAsyncQueryAsync(QueryId, _queryOptions, format: null, cancellationToken).ConfigureAwait(false);
+		var response = await _executor.PollAsyncQueryAsync(QueryId, _request, cancellationToken).ConfigureAwait(false);
 
-		await DisposeOwnedResponseAsync().ConfigureAwait(false);
-		DisposeResults();
-		_ownedAsyncResponse = response;
+		await ReplaceOwnedResponseAsync(response).ConfigureAwait(false);
 
 		_asyncResult = await _reader.ReadRowsAsync<T>(response.Body, cancellationToken: cancellationToken).ConfigureAwait(false);
 		_syncResult = null;
@@ -150,11 +172,9 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 
 		while (true)
 		{
-			var response = await _executor.PollAsyncQueryAsync(QueryId, _queryOptions, format: null, cancellationToken).ConfigureAwait(false);
+			var response = await _executor.PollAsyncQueryAsync(QueryId, _request, cancellationToken).ConfigureAwait(false);
 
-			await DisposeOwnedResponseAsync().ConfigureAwait(false);
-			DisposeResults();
-			_ownedAsyncResponse = response;
+			await ReplaceOwnedResponseAsync(response).ConfigureAwait(false);
 
 			_asyncResult = await _reader.ReadRowsAsync<T>(response.Body, cancellationToken: cancellationToken).ConfigureAwait(false);
 			_syncResult = null;
@@ -173,19 +193,14 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
 
-		DisposeResults();
-		await DisposeOwnedResponseAsync().ConfigureAwait(false);
-
-		if (QueryId is null)
-			return;
-
 		try
 		{
-			await _executor.DeleteAsyncQueryAsync(QueryId, _queryOptions, default).ConfigureAwait(false);
+			DisposeResults();
+			await DisposeOwnedResponseAsync().ConfigureAwait(false);
 		}
-		catch (Exception)
+		finally
 		{
-			// Best-effort cleanup; executor may throw transport-specific exceptions
+			await DeleteServerQueryAsync().ConfigureAwait(false);
 		}
 	}
 
@@ -198,11 +213,9 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 		if (QueryId is null)
 			throw new InvalidOperationException("Cannot refresh an async query without a query ID.");
 
-		var response = _executor.PollAsyncQuery(QueryId, _queryOptions, format: null);
+		var response = _executor.PollAsyncQuery(QueryId, _request);
 
-		DisposeOwnedResponse();
-		DisposeResults();
-		_ownedSyncResponse = response;
+		ReplaceOwnedResponse(response);
 
 		_syncResult = _reader.ReadRows<T>(response.Body);
 		_asyncResult = null;
@@ -225,11 +238,9 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 
 		while (true)
 		{
-			var response = _executor.PollAsyncQuery(QueryId, _queryOptions, format: null);
+			var response = _executor.PollAsyncQuery(QueryId, _request);
 
-			DisposeOwnedResponse();
-			DisposeResults();
-			_ownedSyncResponse = response;
+			ReplaceOwnedResponse(response);
 
 			_syncResult = _reader.ReadRows<T>(response.Body);
 			_asyncResult = null;
@@ -252,20 +263,47 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 	}
 
 	/// <summary>Disposes the owned response and DELETEs the async query from the cluster (best-effort).</summary>
+	/// <remarks>May block while releasing an asynchronously-submitted response. Prefer <see cref="DisposeAsync"/>.</remarks>
 	public void Dispose()
 	{
 		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
 
-		DisposeResults();
-		DisposeOwnedResponse();
+		try
+		{
+			DisposeResults();
+			DisposeOwnedResponse();
+		}
+		finally
+		{
+			DeleteServerQuery();
+		}
+	}
 
+	// The server-side query outlives a failed local teardown unless it is deleted, so the dispose paths call this from a finally block.
+	private void DeleteServerQuery()
+	{
 		if (QueryId is null)
 			return;
 
 		try
 		{
-			_executor.DeleteAsyncQuery(QueryId, _queryOptions);
+			_executor.DeleteAsyncQuery(QueryId, _request);
+		}
+		catch (Exception)
+		{
+			// Best-effort cleanup; executor may throw transport-specific exceptions
+		}
+	}
+
+	private async ValueTask DeleteServerQueryAsync()
+	{
+		if (QueryId is null)
+			return;
+
+		try
+		{
+			await _executor.DeleteAsyncQueryAsync(QueryId, _request, default).ConfigureAwait(false);
 		}
 		catch (Exception)
 		{
@@ -302,18 +340,38 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 			IsCompleted = true;
 	}
 
+	private static string? ReadAsyncIdHeader(IEsqlAsyncResponse response) =>
+		response.TryGetHeader("X-Elasticsearch-Async-Id", out var values) ? values.FirstOrDefault() : null;
+
+	private static string? ReadAsyncIdHeader(IEsqlResponse response) =>
+		response.TryGetHeader("X-Elasticsearch-Async-Id", out var values) ? values.FirstOrDefault() : null;
+
+	/// <summary>The reader captures a trailing <c>id</c> property only once row enumeration has completed.</summary>
+	private void SyncQueryIdFromResults() =>
+		QueryId ??= _asyncResult?.Id ?? _syncResult?.Id;
+
 	private void DisposeResults()
 	{
-		_asyncResult?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-		_asyncResult = null;
+		if (_asyncResult is { } asyncResult)
+		{
+			_asyncResult = null;
+			// Task.Run keeps the async disposal off the caller's SynchronizationContext so this blocking wait cannot deadlock.
+			Task.Run(() => asyncResult.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+		}
+
 		_syncResult?.Dispose();
 		_syncResult = null;
 	}
 
 	private void DisposeOwnedResponse()
 	{
-		_ownedAsyncResponse?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-		_ownedAsyncResponse = null;
+		if (_ownedAsyncResponse is { } response)
+		{
+			_ownedAsyncResponse = null;
+			// Task.Run keeps the async disposal off the caller's SynchronizationContext so this blocking wait cannot deadlock.
+			Task.Run(() => response.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+		}
+
 		_ownedSyncResponse?.Dispose();
 		_ownedSyncResponse = null;
 	}
@@ -328,6 +386,65 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 
 		_ownedSyncResponse?.Dispose();
 		_ownedSyncResponse = null;
+	}
+
+	// Hands a freshly polled response over to this instance. If releasing the previous response or
+	// results throws, the replacement is disposed best-effort so it cannot leak, and the teardown
+	// failure is what surfaces.
+	private void ReplaceOwnedResponse(IEsqlResponse response)
+	{
+		try
+		{
+			DisposeOwnedResponse();
+			DisposeResults();
+		}
+		catch
+		{
+			DisposeQuietly(response);
+			throw;
+		}
+
+		_ownedSyncResponse = response;
+	}
+
+	private async ValueTask ReplaceOwnedResponseAsync(IEsqlAsyncResponse response)
+	{
+		try
+		{
+			await DisposeOwnedResponseAsync().ConfigureAwait(false);
+			DisposeResults();
+		}
+		catch
+		{
+			await DisposeQuietlyAsync(response).ConfigureAwait(false);
+			throw;
+		}
+
+		_ownedAsyncResponse = response;
+	}
+
+	private static void DisposeQuietly(IDisposable response)
+	{
+		try
+		{
+			response.Dispose();
+		}
+		catch (Exception)
+		{
+			// Best-effort cleanup on the failure path; the teardown exception is the one to surface.
+		}
+	}
+
+	private static async ValueTask DisposeQuietlyAsync(IAsyncDisposable response)
+	{
+		try
+		{
+			await response.DisposeAsync().ConfigureAwait(false);
+		}
+		catch (Exception)
+		{
+			// Best-effort cleanup on the failure path; the teardown exception is the one to surface.
+		}
 	}
 
 	private readonly struct CancellableAsyncEnumerable(
@@ -380,14 +497,22 @@ public sealed class EsqlAsyncQuery<T> : IAsyncDisposable, IDisposable
 
 			object? System.Collections.IEnumerator.Current => Current;
 
-			public bool MoveNext() =>
-				inner.MoveNextAsync().AsTask().GetAwaiter().GetResult();
+			public bool MoveNext()
+			{
+				// Without an ambient SynchronizationContext, blocking inline is deadlock-free and
+				// avoids a per-row thread-pool hop; the Task.Run detour is only needed when a
+				// context could capture the continuation.
+				if (SynchronizationContext.Current is null)
+					return inner.MoveNextAsync().AsTask().GetAwaiter().GetResult();
+
+				return Task.Run(() => inner.MoveNextAsync().AsTask()).GetAwaiter().GetResult();
+			}
 
 			public void Reset() =>
 				throw new NotSupportedException();
 
 			public void Dispose() =>
-				inner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+				Task.Run(() => inner.DisposeAsync().AsTask()).GetAwaiter().GetResult();
 		}
 	}
 }
@@ -405,26 +530,26 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 	private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(100);
 
 	private readonly IEsqlQueryExecutor _executor;
-	private readonly object? _queryOptions;
+	private readonly EsqlExecutionRequest _request;
 	private IEsqlAsyncResponse? _ownedAsyncResponse;
 	private IEsqlResponse? _ownedSyncResponse;
 	private int _disposed;
 
-	internal EsqlAsyncQuery(IEsqlQueryExecutor executor, IEsqlAsyncResponse response, EsqlFormat format, object? queryOptions)
+	internal EsqlAsyncQuery(IEsqlQueryExecutor executor, IEsqlAsyncResponse response, EsqlExecutionRequest request)
 	{
 		_executor = executor;
 		_ownedAsyncResponse = response;
-		Format = format;
-		_queryOptions = queryOptions;
+		Format = request.Format ?? EsqlFormat.Json;
+		_request = request;
 		ApplyHeaderMetadata(response);
 	}
 
-	internal EsqlAsyncQuery(IEsqlQueryExecutor executor, IEsqlResponse response, EsqlFormat format, object? queryOptions)
+	internal EsqlAsyncQuery(IEsqlQueryExecutor executor, IEsqlResponse response, EsqlExecutionRequest request)
 	{
 		_executor = executor;
 		_ownedSyncResponse = response;
-		Format = format;
-		_queryOptions = queryOptions;
+		Format = request.Format ?? EsqlFormat.Json;
+		_request = request;
 		ApplyHeaderMetadata(response);
 	}
 
@@ -487,11 +612,10 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 			throw new InvalidOperationException("Cannot refresh an async query without a query ID.");
 
 		var response = await _executor
-			.PollAsyncQueryAsync(QueryId, _queryOptions, Format, cancellationToken)
+			.PollAsyncQueryAsync(QueryId, _request, cancellationToken)
 			.ConfigureAwait(false);
 
-		await DisposeOwnedResponseAsync().ConfigureAwait(false);
-		_ownedAsyncResponse = response;
+		await ReplaceOwnedResponseAsync(response).ConfigureAwait(false);
 		ApplyHeaderMetadata(response);
 	}
 
@@ -526,10 +650,9 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 		if (QueryId is null)
 			throw new InvalidOperationException("Cannot refresh an async query without a query ID.");
 
-		var response = _executor.PollAsyncQuery(QueryId, _queryOptions, Format);
+		var response = _executor.PollAsyncQuery(QueryId, _request);
 
-		DisposeOwnedResponse();
-		_ownedSyncResponse = response;
+		ReplaceOwnedResponse(response);
 		ApplyHeaderMetadata(response);
 	}
 
@@ -561,14 +684,42 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
 
-		await DisposeOwnedResponseAsync().ConfigureAwait(false);
+		try
+		{
+			await DisposeOwnedResponseAsync().ConfigureAwait(false);
+		}
+		finally
+		{
+			await DeleteServerQueryAsync().ConfigureAwait(false);
+		}
+	}
 
+	/// <summary>Disposes the owned response and DELETEs the async query from the cluster (best-effort).</summary>
+	/// <remarks>May block while releasing an asynchronously-submitted response. Prefer <see cref="DisposeAsync"/>.</remarks>
+	public void Dispose()
+	{
+		if (Interlocked.Exchange(ref _disposed, 1) != 0)
+			return;
+
+		try
+		{
+			DisposeOwnedResponse();
+		}
+		finally
+		{
+			DeleteServerQuery();
+		}
+	}
+
+	// The server-side query outlives a failed local teardown unless it is deleted, so the dispose paths call this from a finally block.
+	private void DeleteServerQuery()
+	{
 		if (QueryId is null)
 			return;
 
 		try
 		{
-			await _executor.DeleteAsyncQueryAsync(QueryId, _queryOptions, default).ConfigureAwait(false);
+			_executor.DeleteAsyncQuery(QueryId, _request);
 		}
 		catch (Exception)
 		{
@@ -576,20 +727,14 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 		}
 	}
 
-	/// <summary>Disposes the owned response and DELETEs the async query from the cluster (best-effort).</summary>
-	public void Dispose()
+	private async ValueTask DeleteServerQueryAsync()
 	{
-		if (Interlocked.Exchange(ref _disposed, 1) != 0)
-			return;
-
-		DisposeOwnedResponse();
-
 		if (QueryId is null)
 			return;
 
 		try
 		{
-			_executor.DeleteAsyncQuery(QueryId, _queryOptions);
+			await _executor.DeleteAsyncQueryAsync(QueryId, _request, default).ConfigureAwait(false);
 		}
 		catch (Exception)
 		{
@@ -650,8 +795,13 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 
 	private void DisposeOwnedResponse()
 	{
-		_ownedAsyncResponse?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-		_ownedAsyncResponse = null;
+		if (_ownedAsyncResponse is { } response)
+		{
+			_ownedAsyncResponse = null;
+			// Task.Run keeps the async disposal off the caller's SynchronizationContext so this blocking wait cannot deadlock.
+			Task.Run(() => response.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+		}
+
 		_ownedSyncResponse?.Dispose();
 		_ownedSyncResponse = null;
 	}
@@ -666,5 +816,62 @@ public sealed class EsqlAsyncQuery : IAsyncDisposable, IDisposable
 
 		_ownedSyncResponse?.Dispose();
 		_ownedSyncResponse = null;
+	}
+
+	// Hands a freshly polled response over to this instance. If releasing the previous response
+	// throws, the replacement is disposed best-effort so it cannot leak, and the teardown failure
+	// is what surfaces.
+	private void ReplaceOwnedResponse(IEsqlResponse response)
+	{
+		try
+		{
+			DisposeOwnedResponse();
+		}
+		catch
+		{
+			DisposeQuietly(response);
+			throw;
+		}
+
+		_ownedSyncResponse = response;
+	}
+
+	private async ValueTask ReplaceOwnedResponseAsync(IEsqlAsyncResponse response)
+	{
+		try
+		{
+			await DisposeOwnedResponseAsync().ConfigureAwait(false);
+		}
+		catch
+		{
+			await DisposeQuietlyAsync(response).ConfigureAwait(false);
+			throw;
+		}
+
+		_ownedAsyncResponse = response;
+	}
+
+	private static void DisposeQuietly(IDisposable response)
+	{
+		try
+		{
+			response.Dispose();
+		}
+		catch (Exception)
+		{
+			// Best-effort cleanup on the failure path; the teardown exception is the one to surface.
+		}
+	}
+
+	private static async ValueTask DisposeQuietlyAsync(IAsyncDisposable response)
+	{
+		try
+		{
+			await response.DisposeAsync().ConfigureAwait(false);
+		}
+		catch (Exception)
+		{
+			// Best-effort cleanup on the failure path; the teardown exception is the one to surface.
+		}
 	}
 }

@@ -44,7 +44,7 @@ public class DenseVectorTests
 		var vector = JsonSerializer.Deserialize<DenseVector<byte>>("[-1, 0, -128, 100]");
 
 		_ = vector.Length.Should().Be(4);
-		_ = vector.ToArray().Should().Equal((byte)255, (byte)0, (byte)128, (byte)100);
+		_ = vector.ToArray().Should().Equal(255, 0, 128, 100);
 	}
 
 	[Test]
@@ -54,7 +54,7 @@ public class DenseVectorTests
 		var vector = JsonSerializer.Deserialize<DenseVector<byte>>("[255, 0, 128, 100]");
 
 		_ = vector.Length.Should().Be(4);
-		_ = vector.ToArray().Should().Equal((byte)255, (byte)0, (byte)128, (byte)100);
+		_ = vector.ToArray().Should().Equal(255, 0, 128, 100);
 	}
 
 	[Test]
@@ -72,7 +72,7 @@ public class DenseVectorTests
 
 		var act = () => JsonSerializer.Serialize(vector);
 
-		_ = act.Should().Throw<JsonException>().WithMessage("*NaN*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*NaN*");
 	}
 
 	[Test]
@@ -82,7 +82,7 @@ public class DenseVectorTests
 
 		var act = () => JsonSerializer.Serialize(vector);
 
-		_ = act.Should().Throw<JsonException>().WithMessage("*Infinity*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Infinity*");
 	}
 
 	[Test]
@@ -108,5 +108,15 @@ public class DenseVectorTests
 		DenseVector<float> vec = new ReadOnlyMemory<float>([1f, 2f, 3f]);
 
 		_ = vec.Length.Should().Be(3);
+	}
+
+	[Test]
+	public void DenseVectorFloat_WholeValues_SerializeWithExplicitDecimalPoint()
+	{
+		var vector = new DenseVector<float>([1f, 2f, 3f]);
+
+		var json = JsonSerializer.Serialize(vector);
+
+		_ = json.Should().Be("[1.0,2.0,3.0]");
 	}
 }

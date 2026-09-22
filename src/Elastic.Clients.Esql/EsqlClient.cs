@@ -24,7 +24,7 @@ namespace Elastic.Clients.Esql;
 public class EsqlClient : IDisposable
 {
 	private readonly EsqlQueryProvider _provider;
-	private bool _disposed;
+	private int _disposed;
 
 	/// <summary>
 	/// Gets the client settings.
@@ -42,7 +42,7 @@ public class EsqlClient : IDisposable
 		var jsonOptions = settings.ResolveJsonOptions();
 		var executor = new EsqlTransportExecutor(settings);
 
-		_provider = new EsqlQueryProvider(jsonOptions, executor);
+		_provider = new EsqlQueryProvider(jsonOptions, executor) { Interceptor = settings.Interceptor };
 	}
 
 	/// <summary>
@@ -244,12 +244,17 @@ public class EsqlClient : IDisposable
 
 	public void Dispose()
 	{
-		if (_disposed)
+		// The client is documented as thread-safe, so concurrent Dispose calls must release the owned resources once.
+		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
 
-		_disposed = true;
-
-		if (Settings.Transport is IDisposable disposableTransport)
+		// The built-in DistributedTransport is not IDisposable (only its ITransportConfiguration is),
+		// so this gate only takes effect for custom transports that implement IDisposable.
+		if (Settings.OwnsTransport && Settings.Transport is IDisposable disposableTransport)
 			disposableTransport.Dispose();
+
+		// Configurations created by the settings constructors are owned here and hold the
+		// connection resources; externally supplied configurations belong to the caller.
+		Settings.OwnedConfiguration?.Dispose();
 	}
 }

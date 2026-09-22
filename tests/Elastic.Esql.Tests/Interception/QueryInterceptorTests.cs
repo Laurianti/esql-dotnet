@@ -166,7 +166,7 @@ public class QueryInterceptorTests
 	}
 
 	[Test]
-	public void Interceptor_NotAppliedToGetQueryOptions()
+	public void Interceptor_AppliedToGetQueryOptions()
 	{
 		var called = false;
 		var interceptor = new TypeCapturingInterceptor(_ => called = true);
@@ -177,7 +177,81 @@ public class QueryInterceptorTests
 
 		_ = query.GetQueryOptions();
 
-		_ = called.Should().BeFalse();
+		_ = called.Should().BeTrue();
+	}
+
+	[Test]
+	public void Interceptor_AppliedToGetExecutorOptions()
+	{
+		var called = false;
+		var interceptor = new TypeCapturingInterceptor(_ => called = true);
+
+		var query = CreateQuery<LogEntry>(interceptor)
+			.From("logs-*")
+			.AsEsqlQueryable();
+
+		_ = query.GetExecutorOptions();
+
+		_ = called.Should().BeTrue();
+	}
+
+	[Test]
+	public void Interceptor_SetsQueryOptions_VisibleThroughGetQueryOptions()
+	{
+		var query = CreateQuery<LogEntry>(new TimeZoneInterceptor())
+			.From("logs-*")
+			.AsEsqlQueryable();
+
+		_ = query.GetQueryOptions()!.TimeZone.Should().Be("UTC");
+	}
+
+	[Test]
+	public void Interceptor_OnOptionInspection_SeesTheParameterizedModel()
+	{
+		var threshold = 500;
+		var seen = new List<EsqlParameters?>();
+
+		var query = CreateQuery<LogEntry>(new ParametersCapturingInterceptor(seen.Add))
+			.Where(l => l.StatusCode >= threshold)
+			.AsEsqlQueryable();
+
+		_ = query.GetQueryOptions();
+		_ = query.GetExecutorOptions();
+
+		_ = seen.Should().HaveCount(2);
+		foreach (var parameters in seen)
+		{
+			_ = parameters.Should().NotBeNull();
+			_ = parameters.Parameters.Should().ContainKey("threshold");
+		}
+	}
+
+	private sealed class TimeZoneInterceptor : IEsqlQueryInterceptor
+	{
+		public EsqlQuery Intercept(EsqlQuery query) =>
+			query.WithQueryOptions(new EsqlQueryOptions { TimeZone = "UTC" });
+	}
+
+	[Test]
+	public void Interceptor_InjectsParameterizedWhere_ValueRoundTrips()
+	{
+		var interceptor = new ParameterizedWhereInterceptor(500);
+
+		var query = CreateQuery<LogEntry>(interceptor)
+			.From("logs-*")
+			.AsEsqlQueryable();
+
+		var esql = query.ToEsqlString(inlineParameters: false);
+		var parameters = query.GetParameters();
+
+		_ = esql.Should().Be(
+			"""
+			FROM logs-*
+			| WHERE statusCode >= ?minStatus
+			""".NativeLineEndings());
+
+		_ = parameters.Should().NotBeNull();
+		_ = parameters.Parameters["minStatus"].GetInt32().Should().Be(500);
 	}
 
 	private sealed class SourceInferenceInterceptor(string defaultIndex) : IEsqlQueryInterceptor
@@ -218,6 +292,29 @@ public class QueryInterceptorTests
 		{
 			capture(query.ElementType);
 			return query;
+		}
+	}
+
+	private sealed class ParametersCapturingInterceptor(Action<EsqlParameters?> capture) : IEsqlQueryInterceptor
+	{
+		public EsqlQuery Intercept(EsqlQuery query)
+		{
+			capture(query.Parameters);
+			return query;
+		}
+	}
+
+	private sealed class ParameterizedWhereInterceptor(int minStatus) : IEsqlQueryInterceptor
+	{
+		public EsqlQuery Intercept(EsqlQuery query)
+		{
+			var parameters = query.Parameters ?? new();
+			var name = parameters.Add("minStatus", JsonSerializer.SerializeToElement(minStatus));
+
+			var commands = query.Commands.ToList();
+			commands.Add(new WhereCommand($"statusCode >= ?{name}"));
+
+			return query.WithCommands(commands).WithParameters(parameters);
 		}
 	}
 }

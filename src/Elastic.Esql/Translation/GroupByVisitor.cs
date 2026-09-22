@@ -3,7 +3,6 @@
 // See the LICENSE file in the project root for more information
 
 using System.Linq.Expressions;
-using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Functions;
 using Elastic.Esql.QueryModel.Commands;
@@ -17,25 +16,15 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 {
 	private const string SingleKeyMarker = "__single_key__";
 	private readonly EsqlTranslationContext _context = context ?? throw new ArgumentNullException(nameof(context));
-
-	/// <summary>
-	/// Translates a GroupBy key selector to a STATS command (without result selector).
-	/// </summary>
-	public StatsCommand Translate(LambdaExpression keySelector)
-	{
-		var groupByFields = ExtractGroupByFields(keySelector.Body);
-
-		// Default aggregation - Count
-		var aggregations = new[] { "count = COUNT(*)" };
-
-		return new StatsCommand(aggregations, groupByFields.Count > 0 ? groupByFields : null);
-	}
+	private LambdaExpression? _elementSelector;
 
 	/// <summary>
 	/// Translates a GroupBy with result selector (from subsequent Select) to a STATS command.
 	/// </summary>
-	public StatsCommand Translate(LambdaExpression keySelector, LambdaExpression resultSelector)
+	public StatsCommand Translate(LambdaExpression keySelector, LambdaExpression resultSelector, LambdaExpression? elementSelector = null)
 	{
+		_elementSelector = elementSelector;
+
 		var groupByFields = ExtractGroupByFields(keySelector.Body);
 		var keyPropertyNames = ExtractKeyPropertyNames(keySelector.Body);
 		var (aggregations, keyAliasMap) = ExtractAggregationsAndKeyAliases(resultSelector);
@@ -107,13 +96,39 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 
 		var members = ExtractResultMembers(resultSelector.Body);
 
+		if (members.Count == 0)
+		{
+			// A scalar selector such as g => g.Sum(x => x.Duration) is one aggregation named after its
+			// method. Any other member-less shape (g => g.Key, arbitrary expressions) has no STATS
+			// equivalent and must not fall through to the default count.
+			var body = resultSelector.Body.UnwrapConvertExpressions();
+			var scalarAggregation = (body is MethodCallExpression call ? TryExtractAggregation(body, call.Method.Name.ToLowerInvariant()) : null)
+				?? throw new NotSupportedException(
+					"The GroupBy result selector must be an object initializer of aggregations and 'g.Key' accesses, " +
+					$"or a single aggregation call such as g => g.Count(); '{resultSelector.Body}' is neither.");
+
+			aggregations.Add(scalarAggregation);
+			return (aggregations, keyAliasMap);
+		}
+
 		foreach (var (memberName, arg) in members)
 		{
 			var agg = TryExtractAggregation(arg, memberName);
 			if (agg != null)
+			{
 				aggregations.Add(agg);
-			else if (TryGetKeyPropertyName(arg, out var keyPropName))
+				continue;
+			}
+
+			if (TryGetKeyPropertyName(arg, out var keyPropName))
+			{
 				keyAliasMap[keyPropName] = memberName;
+				continue;
+			}
+
+			throw new NotSupportedException(
+				$"Member '{memberName}' in the GroupBy result selector is neither a supported aggregation nor a group key access. " +
+				"STATS supports aggregation functions and 'g.Key' references only; compute derived values in a subsequent Select.");
 		}
 
 		// If no aggregations found, default to count
@@ -268,6 +283,12 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 			var selector = methodCall.Arguments[1];
 			fieldExpr = ExtractFieldFromSelector(selector);
 		}
+		else if (_elementSelector is not null && methodName is "Sum" or "Average" or "Min" or "Max")
+		{
+			// A parameterless aggregation on IGrouping<K, TElement> aggregates the elements
+			// produced by the GroupBy element selector.
+			fieldExpr = ExtractFieldFromLambdaBody(_elementSelector.Body.UnwrapConvertExpressions());
+		}
 
 		return methodName switch
 		{
@@ -309,7 +330,9 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 				throw new NotSupportedException($"Aggregation argument '{arg}' must be constant or closure-captured.", ex);
 			}
 
-			return value?.ToString();
+			// The shared formatter keeps whole doubles explicit (99.0) and quotes strings, so
+			// aggregation arguments type the same way as WHERE and EVAL literals.
+			return value is null ? null : _context.FormatValue(value);
 		}
 
 		var fieldExpr = ExtractField(1);
@@ -323,7 +346,7 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 			"StdDev" => $"{resultName} = STD_DEV({fieldExpr})",
 			"Variance" => $"{resultName} = VARIANCE({fieldExpr})",
 			"WeightedAvg" => $"{resultName} = WEIGHTED_AVG({fieldExpr}, {ExtractField(2)})",
-			"Top" => $"{resultName} = TOP({fieldExpr}, {ExtractConstantArg(2)}, {_context.FormatValue(ExtractConstantArg(3))})",
+			"Top" => $"{resultName} = TOP({fieldExpr}, {ExtractConstantArg(2)}, {ExtractConstantArg(3)})",
 			"Values" => $"{resultName} = VALUES({fieldExpr})",
 			"First" => $"{resultName} = FIRST({fieldExpr})",
 			"Last" => $"{resultName} = LAST({fieldExpr})",

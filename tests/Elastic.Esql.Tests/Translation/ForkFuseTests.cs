@@ -6,6 +6,9 @@ namespace Elastic.Esql.Tests.Translation;
 
 public class ForkFuseTests : EsqlTestBase
 {
+	private static readonly float[] FloatVec1 = [1f];
+	private static readonly float[] FloatVec1_2 = [1f, 2f];
+
 	[Test]
 	public void Fork_TwoBranches_GeneratesParenthesisedBranches()
 	{
@@ -13,13 +16,13 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "Shakespeare")).Take(100),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f, 2f })).Take(100))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1_2)).Take(100))
 			.ToString();
 
 		_ = esql.Should().Be(
 			"""
 			FROM books METADATA _id, _index, _score
-			| FORK (WHERE MATCH(title, "Shakespeare") | LIMIT 100) (WHERE KNN(titleVec, [1, 2]) | LIMIT 100)
+			| FORK (WHERE MATCH(title, "Shakespeare") | LIMIT 100) (WHERE KNN(titleVec, [1.0, 2.0]) | LIMIT 100)
 			""".NativeLineEndings());
 	}
 
@@ -30,7 +33,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "shakespeare")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse()
 			.ToString();
 
@@ -44,7 +47,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse(rankConstant: 80)
 			.ToString();
 
@@ -58,7 +61,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse(method: FuseMethod.Linear, normalizer: ScoreNormalizer.MinMax, weights: [0.7, 0.3])
 			.ToString();
 
@@ -72,7 +75,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse(weights: [0.7, 0.3, 0.5])
 			.ToString();
 
@@ -97,8 +100,8 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
-			.Fuse(key: x => new { Id = EsqlMetadata.Id })
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
+			.Fuse(key: x => new { EsqlMetadata.Id })
 			.ToString();
 
 		_ = esql.Should().EndWith("| FUSE KEY BY _id");
@@ -111,7 +114,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse(score: x => EsqlMetadata.Score * 2)
 			.ToString();
 
@@ -125,11 +128,53 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse()
 			.ToString();
 
 		_ = act.Should().Throw<InvalidOperationException>().WithMessage("*Fork branch 1*Take*LIMIT*");
+	}
+
+	[Test]
+	public void Fuse_WithLowercaseRawLimitInBranch_AcceptsTheBranch()
+	{
+		var esql = CreateQuery<BookDocument>()
+			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
+			.Fork(
+				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).RawEsql("limit 10"),
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
+			.Fuse()
+			.ToString();
+
+		_ = esql.Should().Contain("| limit 10)").And.EndWith("| FUSE");
+	}
+
+	[Test]
+	public void Fuse_WithTabSeparatedRawLimitInBranch_AcceptsTheBranch()
+	{
+		var esql = CreateQuery<BookDocument>()
+			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
+			.Fork(
+				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).RawEsql("LIMIT\t10"),
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
+			.Fuse()
+			.ToString();
+
+		_ = esql.Should().Contain("| LIMIT\t10)").And.EndWith("| FUSE");
+	}
+
+	[Test]
+	public void Fuse_WithRawLimitLikePrefixInBranch_StillRequiresLimit()
+	{
+		var act = () => CreateQuery<BookDocument>()
+			.From("books", MetadataField.Id | MetadataField.Index | MetadataField.Score)
+			.Fork(
+				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).RawEsql("LIMITS 10"),
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
+			.Fuse()
+			.ToString();
+
+		_ = act.Should().Throw<InvalidOperationException>().WithMessage("*Fork branch 1*LIMIT*");
 	}
 
 	[Test]
@@ -139,7 +184,7 @@ public class ForkFuseTests : EsqlTestBase
 			.From("books", MetadataField.Id | MetadataField.Score)
 			.Fork(
 				b => b.Where(x => EsqlFunctions.Match(x.Title, "x")).Take(50),
-				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, new float[] { 1f })).Take(50))
+				b => b.Where(x => EsqlFunctions.Knn(x.TitleVec, FloatVec1)).Take(50))
 			.Fuse()
 			.Select(b => new { b.Title })
 			.ToString();

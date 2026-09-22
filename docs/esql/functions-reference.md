@@ -70,7 +70,7 @@ DateTime properties translate to `DATE_EXTRACT`. Arithmetic methods like `.AddDa
 
 ```csharp
 .Where(l => l.Timestamp > DateTime.UtcNow.AddHours(-1) && l.Timestamp.Year == 2025)
-// WHERE (@timestamp > (NOW() + -1 hours) AND DATE_EXTRACT("year", @timestamp) == 2025)
+// WHERE (@timestamp > (NOW() - 1 hours) AND DATE_EXTRACT("year", @timestamp) == 2025)
 ```
 
 | ES\|QL | `EsqlFunctions` | C# native |
@@ -86,6 +86,8 @@ DateTime properties translate to `DATE_EXTRACT`. Arithmetic methods like `.AddDa
 | [`TRANGE`](elasticsearch://reference/query-languages/esql/functions-operators/date-time-functions.md#esql-trange) | `EsqlFunctions.TRange(start, end)` | |
 | Date arithmetic | | `.AddDays(n)`, `.AddHours(n)`, `.AddMinutes(n)`, `.AddSeconds(n)`, `.AddMilliseconds(n)` |
 | Time intervals | | `TimeSpan.FromDays(n)`, `.FromHours(n)`, `.FromMinutes(n)`, `.FromSeconds(n)` |
+
+Comparisons against `DayOfWeek` values are remapped automatically: ES|QL `day_of_week` uses ISO numbering (Monday = 1 to Sunday = 7), while .NET `DayOfWeek` starts at Sunday = 0. A predicate like `l.Timestamp.DayOfWeek == DayOfWeek.Sunday` translates to `DATE_EXTRACT("day_of_week", @timestamp) == 7`.
 
 ## Grouping functions
 

@@ -4,6 +4,7 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Elastic.Esql.Tests.TypeMapping.Escaping;
 
 namespace Elastic.Esql.Tests;
 
@@ -22,6 +23,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(StatsProjection))]
 [JsonSerializable(typeof(OrdinalEnumDocument))]
 [JsonSerializable(typeof(CustomConverterDocument))]
+[JsonSerializable(typeof(ConvertedDurationDocument))]
 [JsonSerializable(typeof(RecordProjection))]
 [JsonSerializable(typeof(UnmatchedCtorProjection))]
 [JsonSerializable(typeof(CollisionRecord))]
@@ -30,6 +32,11 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(DottedLevelLookup))]
 [JsonSerializable(typeof(BookDocument))]
 [JsonSerializable(typeof(BookProjection))]
+[JsonSerializable(typeof(DottedJsonNameDocument))]
+[JsonSerializable(typeof(SpecialCharacterDocument))]
+[JsonSerializable(typeof(SpecialCharacterLookup))]
+[JsonSerializable(typeof(SpecialCharacterProjection))]
+[JsonSerializable(typeof(ColumnNameEscapingTests.EqualsSignTarget))]
 public sealed partial class EsqlTestMappingContext : JsonSerializerContext;
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
@@ -249,6 +256,25 @@ public class CustomConverterDocument
 	public string Name { get; set; } = string.Empty;
 }
 
+/// <summary>Serializes a <see cref="TimeSpan"/> as whole milliseconds, as a duration stored in a numeric column would be.</summary>
+public class MillisecondsTimeSpanConverter : JsonConverter<TimeSpan>
+{
+	public override TimeSpan Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+		TimeSpan.FromMilliseconds(reader.GetInt64());
+
+	public override void Write(Utf8JsonWriter writer, TimeSpan value, JsonSerializerOptions options) =>
+		writer.WriteNumberValue((long)value.TotalMilliseconds);
+}
+
+/// <summary>Document whose duration carries a property-level converter that must win over the default duration literal.</summary>
+public class ConvertedDurationDocument
+{
+	[JsonConverter(typeof(MillisecondsTimeSpanConverter))]
+	public TimeSpan Duration { get; set; }
+
+	public string Name { get; set; } = string.Empty;
+}
+
 /// <summary>Record projection for testing constructor-call Select.</summary>
 public record RecordProjection(string Message, int StatusCode);
 
@@ -292,6 +318,45 @@ public class NestedSelectionGeo
 {
 	public string City { get; set; } = string.Empty;
 }
+
+/// <summary>Document with a JSON property name containing a dot, which the translator treats as a nested path.</summary>
+public class DottedJsonNameDocument
+{
+	[JsonPropertyName("a.b")]
+	public string? Value { get; set; }
+}
+
+/// <summary>Document whose JSON field names require backtick quoting in ES|QL.</summary>
+public class SpecialCharacterDocument
+{
+	[JsonPropertyName("user-agent")]
+	public UserAgentInfo UserAgent { get; set; } = new();
+
+	[JsonPropertyName("response size")]
+	public int ResponseSize { get; set; }
+
+	public string Message { get; set; } = string.Empty;
+}
+
+public class UserAgentInfo
+{
+	[JsonPropertyName("os name")]
+	public string OsName { get; set; } = string.Empty;
+
+	public string Version { get; set; } = string.Empty;
+}
+
+/// <summary>Lookup document sharing the quoted "user-agent" field name for join collision tests.</summary>
+public class SpecialCharacterLookup
+{
+	public string Message { get; set; } = string.Empty;
+
+	[JsonPropertyName("user-agent")]
+	public string UserAgent { get; set; } = string.Empty;
+}
+
+/// <summary>Projection record whose JSON name requires quoting, for constructor-call Select tests.</summary>
+public record SpecialCharacterProjection([property: JsonPropertyName("user-agent")] string UserAgent);
 
 // ============================================================================
 // MATERIALIZATION TEST MODELS: used by deserialization edge-case tests

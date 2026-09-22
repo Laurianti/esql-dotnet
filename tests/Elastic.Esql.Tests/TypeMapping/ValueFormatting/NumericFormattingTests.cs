@@ -57,18 +57,45 @@ public class NumericFormattingTests : EsqlTestBase
 	}
 
 	[Test]
-	public void FormatValue_DoubleNaN_ReturnsNull()
+	public void FormatValue_DoubleNeedingSeventeenDigits_RoundTrips()
 	{
-		var result = EsqlFormatting.FormatValue(double.NaN, ReaderOptions);
+		var value = 0.1 + 0.2;
 
-		_ = result.Should().Be("null");
+		var result = EsqlFormatting.FormatValue(value, ReaderOptions);
+
+		_ = result.Should().Be("0.30000000000000004");
+		_ = double.Parse(result, System.Globalization.CultureInfo.InvariantCulture).Should().Be(value);
 	}
 
 	[Test]
-	public void FormatValue_DoublePositiveInfinity_ReturnsNull()
+	public void FormatValue_SubMillisecondTimeSpan_ThrowsNotSupported()
 	{
-		var result = EsqlFormatting.FormatValue(double.PositiveInfinity, ReaderOptions);
+		var act = () => EsqlFormatting.FormatValue(TimeSpan.FromTicks(15), ReaderOptions);
 
-		_ = result.Should().Be("null");
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void FormatValue_DoubleNaN_ThrowsNotSupported()
+	{
+		var act = () => EsqlFormatting.FormatValue(double.NaN, ReaderOptions);
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void FormatValue_DoublePositiveInfinity_ThrowsNotSupported()
+	{
+		var act = () => EsqlFormatting.FormatValue(double.PositiveInfinity, ReaderOptions);
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void FormatValue_FloatNaN_ThrowsNotSupported()
+	{
+		var act = () => EsqlFormatting.FormatValue(float.NaN, ReaderOptions);
+
+		_ = act.Should().Throw<NotSupportedException>();
 	}
 }

@@ -17,8 +17,8 @@ internal static class EsqlFormatting
 {
 	/// <summary>
 	/// Formats a C# value for use in an ES|QL query literal. Types with ES|QL-specific
-	/// formatting (DateTime, TimeSpan, float/double NaN) are handled explicitly; all other
-	/// types are serialized via <see cref="JsonSerializer"/> using the provided options.
+	/// formatting (DateTime, TimeSpan) are handled explicitly; all other types are serialized
+	/// via <see cref="JsonSerializer"/> using the provided options.
 	/// </summary>
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Serialization delegates to the user-provided JsonSerializerOptions/JsonSerializerContext which is expected to include an AOT-safe TypeInfoResolver.")]
 	[UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Serialization delegates to the user-provided JsonSerializerOptions/JsonSerializerContext which is expected to include an AOT-safe TypeInfoResolver.")]
@@ -31,8 +31,8 @@ internal static class EsqlFormatting
 			DateTime dt => FormatDateTime(dt),
 			DateTimeOffset dto => FormatDateTime(dto.UtcDateTime),
 #if NET6_0_OR_GREATER
-			DateOnly d => $"\"{d:yyyy-MM-dd}\"",
-			TimeOnly t => $"\"{t:HH:mm:ss}\"",
+			DateOnly d => $"\"{d.ToString("yyyy-MM-dd", InvariantCulture)}\"",
+			TimeOnly t => $"\"{t.ToString("HH:mm:ss", InvariantCulture)}\"",
 #endif
 			TimeSpan ts => FormatTimeSpan(ts),
 			float f => FormatFloat(f),
@@ -49,9 +49,7 @@ internal static class EsqlFormatting
 		for (var i = 0; i < span.Length; i++)
 		{
 			if (float.IsNaN(span[i]) || float.IsInfinity(span[i]))
-				throw new ArgumentException(
-					$"Vector element at index {i} is NaN or Infinity, which cannot be expressed in ES|QL.",
-					nameof(span));
+				throw NonFiniteVectorElementNotSupported(i);
 		}
 
 		var sb = new StringBuilder("[");
@@ -112,32 +110,61 @@ internal static class EsqlFormatting
 	internal static string FormatTimeSpanRaw(TimeSpan ts)
 	{
 		if (ts.Ticks % TimeSpan.TicksPerDay == 0)
-			return $"{ts.Ticks / TimeSpan.TicksPerDay} days";
+			return $"{(ts.Ticks / TimeSpan.TicksPerDay).ToString(InvariantCulture)} days";
 		if (ts.Ticks % TimeSpan.TicksPerHour == 0)
-			return $"{ts.Ticks / TimeSpan.TicksPerHour} hours";
+			return $"{(ts.Ticks / TimeSpan.TicksPerHour).ToString(InvariantCulture)} hours";
 		if (ts.Ticks % TimeSpan.TicksPerMinute == 0)
-			return $"{ts.Ticks / TimeSpan.TicksPerMinute} minutes";
+			return $"{(ts.Ticks / TimeSpan.TicksPerMinute).ToString(InvariantCulture)} minutes";
 		if (ts.Ticks % TimeSpan.TicksPerSecond == 0)
-			return $"{ts.Ticks / TimeSpan.TicksPerSecond} seconds";
+			return $"{(ts.Ticks / TimeSpan.TicksPerSecond).ToString(InvariantCulture)} seconds";
 		if (ts.Ticks % TimeSpan.TicksPerMillisecond == 0)
-			return $"{ts.Ticks / TimeSpan.TicksPerMillisecond} milliseconds";
+			return $"{(ts.Ticks / TimeSpan.TicksPerMillisecond).ToString(InvariantCulture)} milliseconds";
 
-		return $"{ts.TotalMilliseconds.ToString("0.###", InvariantCulture)} milliseconds";
+		// ES|QL duration literals are an integer count and a unit, and the smallest unit is
+		// milliseconds; a fractional count is a parse error on the server.
+		throw new NotSupportedException(
+			$"TimeSpan {ts} cannot be expressed as an ES|QL duration: the smallest ES|QL unit is milliseconds. Round the value to whole milliseconds.");
 	}
 
-	private static string FormatDateTime(DateTime dt) =>
-		$"\"{dt.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}\"";
+	/// <summary>
+	/// Formats a <see cref="DateTime"/> as an invariant UTC ISO-8601 literal.
+	/// Kind policy: Utc is emitted as-is, Local is converted to UTC, and Unspecified is treated
+	/// as UTC without conversion so the query text does not depend on the machine time zone.
+	/// </summary>
+	private static string FormatDateTime(DateTime dt)
+	{
+		var utc = dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : dt;
+		return $"\"{utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", InvariantCulture)}\"";
+	}
 
 	private static string FormatTimeSpan(TimeSpan ts) =>
 		FormatTimeSpanRaw(ts);
 
-	private static string FormatFloat(float f) =>
+	internal static string FormatFloat(float f) =>
 		float.IsNaN(f) || float.IsInfinity(f)
-			? "null"
-			: f.ToString("G9", InvariantCulture);
+			? throw NonFiniteNotSupported(f)
+			: WithExplicitFloatingPoint(f.ToString("G9", InvariantCulture));
 
-	private static string FormatDouble(double d) =>
+	// "R" is the shortest round-trippable form on .NET Core 3.0 and later, identical to "G" there, but on
+	// .NET Framework (reachable through netstandard2.0) "G" stops at 15 significant digits and would
+	// silently change the literal's value.
+	internal static string FormatDouble(double d) =>
 		double.IsNaN(d) || double.IsInfinity(d)
-			? "null"
-			: d.ToString("G", InvariantCulture);
+			? throw NonFiniteNotSupported(d)
+			: WithExplicitFloatingPoint(d.ToString("R", InvariantCulture));
+
+	// ES|QL has no NaN or Infinity literal; rendering null instead would silently turn the
+	// comparison into a null test that matches no rows.
+	private static NotSupportedException NonFiniteNotSupported(object value) =>
+		new(string.Format(InvariantCulture, "{0} cannot be expressed in ES|QL: there is no literal for NaN or Infinity.", value));
+
+	internal static NotSupportedException NonFiniteVectorElementNotSupported(int index) =>
+		new(string.Format(InvariantCulture, "Vector element at index {0} is NaN or Infinity, which cannot be expressed in ES|QL.", index));
+
+	/// <summary>
+	/// A whole-number double like 100.0 renders as "100" under "G", which ES|QL parses as an
+	/// integer literal; integer division then truncates silently. Keep the type explicit.
+	/// </summary>
+	private static string WithExplicitFloatingPoint(string text) =>
+		text.IndexOfAny(['.', 'e', 'E']) < 0 ? $"{text}.0" : text;
 }

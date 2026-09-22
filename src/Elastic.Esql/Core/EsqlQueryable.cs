@@ -89,11 +89,21 @@ public sealed class EsqlQueryable<T> : IEsqlQueryable<T>, IOrderedQueryable<T>
 	}
 
 	/// <inheritdoc/>
-	public object? GetQueryOptions()
+	public EsqlQueryOptions? GetQueryOptions()
 	{
-		var query = Provider.TranslateExpression(Expression, true);
+		// Execution translates with named parameters, so the interceptor must see the same model here.
+		var query = Provider.TranslateAndIntercept(Expression, inlineParameters: false);
 
 		return query.QueryOptions;
+	}
+
+	/// <inheritdoc/>
+	public object? GetExecutorOptions()
+	{
+		// Execution translates with named parameters, so the interceptor must see the same model here.
+		var query = Provider.TranslateAndIntercept(Expression, inlineParameters: false);
+
+		return query.ExecutorOptions;
 	}
 
 	/// <summary>

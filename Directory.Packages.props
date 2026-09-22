@@ -23,11 +23,10 @@
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.0" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
     <!-- Integration tests -->
-    <PackageVersion Include="Testcontainers.Elasticsearch" Version="4.10.0" />
+    <PackageVersion Include="Testcontainers.Elasticsearch" Version="4.15.0" />
     <!-- Benchmarks -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <!-- Build infrastructure -->
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
     <PackageVersion Include="Argu" Version="6.2.5" />
     <PackageVersion Include="Bullseye" Version="6.0.0" />
     <PackageVersion Include="Proc" Version="0.13.0" />

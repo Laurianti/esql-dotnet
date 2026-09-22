@@ -66,6 +66,7 @@ internal sealed partial class EsqlResponseReader
 	{
 		ReadOnlySequence<byte> Buffer { get; }
 		bool IsCompleted { get; }
+		bool IsEofReached { get; }
 		void AdvanceTo(SequencePosition consumed, SequencePosition examined);
 	}
 
@@ -85,6 +86,8 @@ internal sealed partial class EsqlResponseReader
 
 		public bool IsCompleted => asyncBuffer.IsCompleted;
 
+		public bool IsEofReached => asyncBuffer.IsEofReached;
+
 		public ValueTask<bool> ReadAsync(CancellationToken cancellationToken) =>
 			asyncBuffer.ReadAsync(cancellationToken);
 
@@ -98,10 +101,36 @@ internal sealed partial class EsqlResponseReader
 
 		public bool IsCompleted => syncBuffer.IsCompleted;
 
+		public bool IsEofReached => syncBuffer.IsEofReached;
+
 		public bool Read() => syncBuffer.Read();
 
 		public void AdvanceTo(SequencePosition consumed, SequencePosition examined) =>
 			syncBuffer.AdvanceTo(consumed, examined);
+	}
+
+	/// <summary>
+	/// Cursor over an already-drained response region. Exposes the remaining bytes directly instead of
+	/// re-copying them through a stream and a second pooled buffer.
+	/// </summary>
+	private sealed class DrainedBufferCursor(byte[] buffer, int start, int end) : ISyncBufferCursor
+	{
+		private int _consumed = start;
+
+		public ReadOnlySequence<byte> Buffer => new(buffer, _consumed, end - _consumed);
+
+		// The entire payload is in memory, so the exposed buffer is always the final block.
+		public bool IsCompleted => true;
+
+		// The entire payload is already drained into memory, so end of data is always reached.
+		public bool IsEofReached => true;
+
+		public bool Read() => _consumed < end;
+
+		// Positions originate from Buffer, a single-segment sequence over the backing array, so
+		// GetInteger() is the absolute array index (the same contract SyncStreamBuffer relies on).
+		public void AdvanceTo(SequencePosition consumed, SequencePosition examined) =>
+			_consumed = consumed.GetInteger();
 	}
 
 #if NET10_0_OR_GREATER
@@ -112,6 +141,9 @@ internal sealed partial class EsqlResponseReader
 		public ReadOnlySequence<byte> Buffer => _result.Buffer;
 
 		public bool IsCompleted => _result.IsCompleted;
+
+		// For a pipe, a completed read result already means no more data will arrive.
+		public bool IsEofReached => _result.IsCompleted;
 
 		public async ValueTask<bool> ReadAsync(CancellationToken cancellationToken)
 		{
@@ -160,20 +192,47 @@ internal sealed partial class EsqlResponseReader
 		{
 			return options.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>;
 		}
-		catch
+		catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
 		{
+			// No metadata for T: rows deserialize through the non-generic options-based overload instead.
 			return null;
 		}
 	}
 
-	private readonly record struct RowMaterializationPlan<T>(int EstimatedRowSize, bool IsScalar, JsonTypeInfo<T>? TypeInfo);
+	/// <summary>
+	/// Resolves <see cref="JsonTypeInfo{T}"/> for <c>List&lt;T&gt;</c>, enabling batched row deserialization.
+	/// Returns <see langword="null"/> when the configured resolver has no metadata for <c>List&lt;T&gt;</c>
+	/// (e.g. a source-generated context without a <c>List&lt;T&gt;</c> registration); callers must then use
+	/// the per-row typed path so AOT never silently falls back to reflection.
+	/// </summary>
+	private static JsonTypeInfo<List<T>>? TryResolveListTypeInfo<T>(JsonSerializerOptions options)
+	{
+		try
+		{
+			// TryGetTypeInfo answers "not registered" without an exception, which matters for
+			// source-generated contexts that omit List<T>: this runs once per enumeration. A user
+			// converter for List<T> would see the internal batch wrapper instead of the caller's
+			// rows, so only the framework's own list converter keeps batching transparent.
+			return options.TryGetTypeInfo(typeof(List<T>), out var typeInfo)
+				&& typeInfo.Converter.GetType().Assembly == typeof(JsonSerializerOptions).Assembly
+				? typeInfo as JsonTypeInfo<List<T>>
+				: null;
+		}
+		catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+		{
+			// A resolver that throws for List<T> (for example the reflection fallback under Native AOT) means: fall back to the per-row path.
+			return null;
+		}
+	}
+
+	private readonly record struct RowMaterializationPlan<T>(int EstimatedRowSize, bool IsScalar, JsonTypeInfo<T>? TypeInfo, JsonSerializerOptions Options);
 
 	private static RowMaterializationPlan<T> CreateRowMaterializationPlan<T>(ColumnInfo[] columns, JsonSerializerOptions options)
 	{
 		var estimatedRowSize = Math.Max(256, columns.Length * 32);
 		var isScalar = columns.Length == 1 && IsPrimitiveJsonType(typeof(T));
 		var typeInfo = TryResolveTypeInfo<T>(options);
-		return new RowMaterializationPlan<T>(estimatedRowSize, isScalar, typeInfo);
+		return new RowMaterializationPlan<T>(estimatedRowSize, isScalar, typeInfo, options);
 	}
 
 	private static bool IsPrimitiveJsonType(Type type)

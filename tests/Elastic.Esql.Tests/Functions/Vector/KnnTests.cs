@@ -6,18 +6,24 @@ namespace Elastic.Esql.Tests.Functions.Vector;
 
 public class KnnTests : EsqlTestBase
 {
+	private static readonly float[] FloatVec1_2 = [1f, 2f];
+	private static readonly float[] FloatVec1_2_3 = [1f, 2f, 3f];
+
 	[Test]
 	public void Knn_WithInlineFloatArray_EmitsKnnCall()
 	{
+		// The inline array is the expression under test.
+#pragma warning disable CA1861
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, 2f, 3f }))
 			.ToString();
+#pragma warning restore CA1861
 
 		_ = esql.Should().Be(
 			"""
 			FROM books METADATA _score
-			| WHERE KNN(titleVec, [1, 2, 3])
+			| WHERE KNN(titleVec, [1.0, 2.0, 3.0])
 			""".NativeLineEndings());
 	}
 
@@ -32,33 +38,33 @@ public class KnnTests : EsqlTestBase
 			.ToString();
 
 		// Inline parameter mode (default for ToString) -> literal vector array
-		_ = esql.Should().Contain("KNN(titleVec, [1, 2, 3])");
+		_ = esql.Should().Contain("KNN(titleVec, [1.0, 2.0, 3.0])");
 	}
 
 	[Test]
 	public void Knn_WithExplicitReadOnlyMemory_EmitsKnnCall()
 	{
-		var queryVec = new ReadOnlyMemory<float>(new float[] { 1f, 2f, 3f });
+		var queryVec = new ReadOnlyMemory<float>(FloatVec1_2_3);
 
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, queryVec))
 			.ToString();
 
-		_ = esql.Should().Contain("KNN(titleVec, [1, 2, 3])");
+		_ = esql.Should().Contain("KNN(titleVec, [1.0, 2.0, 3.0])");
 	}
 
 	[Test]
 	public void Knn_WithExplicitDenseVector_EmitsKnnCall()
 	{
-		var queryVec = new DenseVector<float>(new float[] { 1f, 2f, 3f });
+		var queryVec = new DenseVector<float>(FloatVec1_2_3);
 
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, queryVec))
 			.ToString();
 
-		_ = esql.Should().Contain("KNN(titleVec, [1, 2, 3])");
+		_ = esql.Should().Contain("KNN(titleVec, [1.0, 2.0, 3.0])");
 	}
 
 	[Test]
@@ -66,13 +72,13 @@ public class KnnTests : EsqlTestBase
 	{
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
-			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, 2f }, new KnnOptions { K = 10, MinCandidates = 100 }))
+			.Where(b => EsqlFunctions.Knn(b.TitleVec, FloatVec1_2, new KnnOptions { K = 10, MinCandidates = 100 }))
 			.ToString();
 
 		_ = esql.Should().Be(
 			"""
 			FROM books METADATA _score
-			| WHERE KNN(titleVec, [1, 2], { "k": 10, "min_candidates": 100 })
+			| WHERE KNN(titleVec, [1.0, 2.0], { "k": 10, "min_candidates": 100 })
 			""".NativeLineEndings());
 	}
 
@@ -113,10 +119,10 @@ public class KnnTests : EsqlTestBase
 
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
-			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, 2f }, options))
+			.Where(b => EsqlFunctions.Knn(b.TitleVec, FloatVec1_2, options))
 			.ToString();
 
-		_ = esql.Should().Contain("KNN(titleVec, [1, 2], { \"k\": 10, \"similarity\": 0.5 })");
+		_ = esql.Should().Contain("KNN(titleVec, [1.0, 2.0], { \"k\": 10, \"similarity\": 0.5 })");
 	}
 
 	[Test]
@@ -127,7 +133,7 @@ public class KnnTests : EsqlTestBase
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, float.NaN, 3f }))
 			.ToString();
 
-		_ = act.Should().Throw<ArgumentException>().WithMessage("*NaN*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*NaN*");
 	}
 
 	[Test]
@@ -138,7 +144,7 @@ public class KnnTests : EsqlTestBase
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, float.PositiveInfinity, 3f }))
 			.ToString();
 
-		_ = act.Should().Throw<ArgumentException>().WithMessage("*Infinity*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Infinity*");
 	}
 
 	[Test]
@@ -147,13 +153,32 @@ public class KnnTests : EsqlTestBase
 		// Two inline vector literals in a single Where clause should not produce parameter
 		// name clashes (in inline mode they go through FormatValue directly, but the
 		// translation must still succeed end-to-end).
+		// The inline arrays are the expressions under test.
+#pragma warning disable CA1861
 		var esql = CreateQuery<BookDocument>()
 			.From("books", MetadataField.Score)
 			.Where(b => EsqlFunctions.Knn(b.TitleVec, new float[] { 1f, 2f })
 				|| EsqlFunctions.Knn(b.TitleVec, new float[] { 3f, 4f }))
 			.ToString();
+#pragma warning restore CA1861
 
-		_ = esql.Should().Contain("KNN(titleVec, [1, 2])");
-		_ = esql.Should().Contain("KNN(titleVec, [3, 4])");
+		_ = esql.Should().Contain("KNN(titleVec, [1.0, 2.0])");
+		_ = esql.Should().Contain("KNN(titleVec, [3.0, 4.0])");
+	}
+
+	[Test]
+	public void Knn_WithCapturedClosureVector_Parameterized_KeepsFloatTyping()
+	{
+		var queryVec = new float[] { 1f, 2f, 3f };
+
+		var query = CreateQuery<BookDocument>()
+			.From("books", MetadataField.Score)
+			.Where(b => EsqlFunctions.Knn(b.TitleVec, queryVec));
+
+		_ = query.ToEsqlString(inlineParameters: false);
+		var parameters = query.GetParameters();
+
+		_ = parameters.Should().NotBeNull();
+		_ = parameters.Parameters["queryVec"].GetRawText().Should().Be("[1.0,2.0,3.0]");
 	}
 }
