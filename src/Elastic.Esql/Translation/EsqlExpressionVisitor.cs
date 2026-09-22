@@ -290,13 +290,31 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				_pendingGroupByKeySelector = null;
 				_pendingGroupByElementSelector = null;
 				ClearMetadataAfterStats();
+				Context.HasProjected = true;
 				return;
 			}
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
 			var result = projectionVisitor.Translate(lambda);
+			// From here the rows are whatever the selector built, not the document, unless
+			// the selector hands the row back as it is: an identity Select projects nothing
+			// of its own and leaves the document where it was. Raised after the translation,
+			// since within this selector the parameter is still the row that came before.
+			Context.HasProjected |= !IsIdentitySelector(lambda);
+
 			ProjectionEmitter.Emit(result);
 		}
+	}
+
+	/// <summary>A selector that returns its parameter, possibly through a conversion.</summary>
+	private static bool IsIdentitySelector(LambdaExpression lambda)
+	{
+		var body = lambda.Body;
+
+		while (body is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert)
+			body = convert.Operand;
+
+		return lambda.Parameters.Count == 1 && body == lambda.Parameters[0];
 	}
 
 	private void VisitOrderBy(MethodCallExpression node, bool descending)

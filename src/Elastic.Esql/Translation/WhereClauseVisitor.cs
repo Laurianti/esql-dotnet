@@ -40,6 +40,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	protected override Expression VisitBinary(BinaryExpression node)
 	{
+		if (TryVisitRootNullGuard(node))
+			return node;
+
 		if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual)
 		{
 			var nullOp = node.NodeType == ExpressionType.Equal ? "IS NULL" : "IS NOT NULL";
@@ -817,6 +820,50 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static string RequireSearchValue(MethodCallExpression node, string methodName) =>
 		GetConstantValue(node.Arguments[0])?.ToString()
 			?? throw new NotSupportedException($"The search value passed to '{methodName}' must not be null; the LIKE pattern would match everything.");
+
+	/// <summary>
+	/// "p != null" on the lambda parameter itself: the document is never null, and
+	/// there is no field to put in front of IS NOT NULL, so the guard is a constant.
+	/// </summary>
+	private bool TryVisitRootNullGuard(BinaryExpression node)
+	{
+		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
+			return false;
+
+		// ResolvesToNull reads the captured form too, and the parameter side is unwrapped,
+		// since a hand-built tree converts the row to object to match the operand types.
+		var parameter = node.Left.UnwrapConvertExpressions() is ParameterExpression left && ResolvesToNull(node.Right) ? left
+			: node.Right.UnwrapConvertExpressions() is ParameterExpression right && ResolvesToNull(node.Left) ? right
+			: null;
+
+		if (parameter is null)
+			return false;
+
+		// Only the document row is known never to be null, and there the guard is a
+		// constant. After a projection the parameter stands for the projected value,
+		// which has no field name of its own to compare, so the shape is refused
+		// rather than folded into a constant that would drop every row.
+		if (!IsDocumentParameter(parameter))
+		{
+			throw new NotSupportedException(
+				"A null comparison against a projected value is not supported: compare the "
+				+ "document field instead, before the projection.");
+		}
+
+		_ = _builder.Append(node.NodeType == ExpressionType.Equal ? "FALSE" : "TRUE");
+		return true;
+	}
+
+	/// <summary>Whether the parameter stands for the document row rather than a projected value.</summary>
+	private bool IsDocumentParameter(ParameterExpression parameter) =>
+		!parameter.Type.IsValueType
+		&& parameter.Type != typeof(string)
+		&& (_context.ElementType is null || parameter.Type == _context.ElementType)
+		// Matching the element type is not enough: a recursive type projects to itself,
+		// as in ".Select(n => n.Child)" over "Node.Child : Node?", and the projected
+		// value may well be null. Keep and Drop narrow the columns but leave the row,
+		// so the question is whether a Select has run, not which commands were emitted.
+		&& !_context.HasProjected;
 
 	private static string EscapeLikePattern(string value) =>
 		// Pattern-level escaping only: a backslash escapes LIKE wildcards. String-literal
