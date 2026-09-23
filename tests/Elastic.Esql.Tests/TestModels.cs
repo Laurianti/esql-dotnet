@@ -13,6 +13,9 @@ namespace Elastic.Esql.Tests;
 // ============================================================================
 
 [JsonSerializable(typeof(LogEntry))]
+[JsonSerializable(typeof(TaggedProduct))]
+[JsonSerializable(typeof(SetTaggedProduct))]
+[JsonSerializable(typeof(InterfaceTaggedProduct))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
 [JsonSerializable(typeof(OptionalCountProjection))]
@@ -111,6 +114,32 @@ public class NestedSelectionHostWithTag(string tag)
 public class OptionalCountProjection
 {
 	public int? Count { get; set; }
+}
+
+/// <summary>
+/// Document with multi-value fields, for predicates over collections.
+/// </summary>
+public class TaggedProduct
+{
+	public string Name { get; set; } = string.Empty;
+
+	public string[] Tags { get; set; } = [];
+
+	public List<string> Categories { get; set; } = [];
+
+	public List<int> Ratings { get; set; } = [];
+}
+
+/// <summary>Document whose tags are a set: a set answers Contains by its own comparer.</summary>
+public class SetTaggedProduct
+{
+	public HashSet<string> Tags { get; set; } = [];
+}
+
+/// <summary>Document whose tags are typed as an interface, which says nothing about the collection.</summary>
+public class InterfaceTaggedProduct
+{
+	public ICollection<string> Tags { get; set; } = [];
 }
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
