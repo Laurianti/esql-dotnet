@@ -2,6 +2,8 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Linq.Expressions;
+
 namespace Elastic.Esql.Tests.Translation.SelectProjection;
 
 /// <summary>
@@ -19,7 +21,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }
 			})
 			.ToString();
 
@@ -43,8 +45,8 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 					? null
 					: new NestedSelectionHost
 					{
-						Name = l.Host!.Name,
-						Geo = l.Host.Geo == null ? null : new NestedSelectionGeo { City = l.Host!.Geo!.City }
+						Name = l.Host.Name,
+						Geo = l.Host.Geo == null ? null : new NestedSelectionGeo { City = l.Host.Geo.City }
 					}
 			})
 			.ToString();
@@ -115,7 +117,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new LazyHostRecord(l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name }))
+			.Select(l => new LazyHostRecord(l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name }))
 			.ToString();
 
 		_ = esql.Should().Contain("host.name");
@@ -275,13 +277,17 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	[Test]
 	public void Select_GuardOnAProjectedValueReadThrough_IsUnwrapped()
 	{
-		var esql = CreateQuery<TreeNode>()
+		// the guard is dropped rather than refused, which is what this pins. Chaining a
+		// Select onto an object selection names a column the earlier KEEP has already
+		// replaced, guarded or not, which is #54 and not asserted here.
+		var query = CreateQuery<TreeNode>()
 			.From("nodes")
 			.Select(n => n.Child)
-			.Select(n => new { Wrap = n == null ? null : new { n.Name } })
-			.ToString();
+			.Select(n => new { Wrap = n == null ? null : new { n.Name } });
 
-		_ = esql.Should().Contain("RENAME name AS wrap.name");
+		var act = () => query.ToString();
+
+		_ = act.Should().NotThrow();
 	}
 
 	[Test]
@@ -320,7 +326,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new
 			{
-				Host = l.Host == null ? null : new NestedSelectionHostWithTag("constant") { Name = l.Host!.Name }
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag("constant") { Name = l.Host.Name }
 			});
 
 		var act = () => query.ToString();
@@ -335,7 +341,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new
 			{
-				Host = l.Host == null ? null : new NestedSelectionHostWithTag(l.Host.Name) { Name = l.Host!.Name }
+				Host = l.Host == null ? null : new NestedSelectionHostWithTag(l.Host.Name) { Name = l.Host.Name }
 			});
 
 		var act = () => query.ToString();
@@ -344,18 +350,22 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Select_GuardedScalarIntoANonNullableMember_ThrowsNotSupported()
+	public void Select_GuardedScalarIntoANonNullableMember_StillProjects()
 	{
-		// a guarded scalar is held to the same rule as a guarded child: with the guard
-		// dropped, a missing value comes back as the member's default, an empty string
-		// here, not as the guard's null
-		var query = CreateQuery<NestedSelectionDocument>()
+		// a scalar leaves the column null for a missing value with or without the guard,
+		// and the member keeps whatever it holds, exactly as "Message = l.Host!.Name"
+		// does: only a child object tells null and an empty object apart
+		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Select(l => new EagerNestedDocument { Message = l.Host == null ? null! : l.Host.Name });
+			.Select(l => new EagerNestedDocument { Message = l.Host == null ? null! : l.Host.Name })
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | RENAME host.name AS message
+            | KEEP message
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -385,7 +395,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 			.From("logs-*")
 			.Select(l => new NestedSelectionDocument
 			{
-				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host!.Name, Geo = { City = "constant" } }
+				Host = l.Host == null ? null : new NestedSelectionHost { Name = l.Host.Name, Geo = { City = "constant" } }
 			});
 #pragma warning restore CS8670
 
@@ -455,7 +465,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 		// the target is a Nullable<int>, which holds the null a guard produces
 		var esql = CreateQuery<LogEntry>()
 			.From("logs-*")
-			.Select(l => new OptionalCountProjection { Count = l == null ? (int?)null : l.StatusCode })
+			.Select(l => new OptionalCountProjection { Count = l == null ? null : l.StatusCode })
 			.ToString();
 
 		_ = esql.Should().Be(
@@ -484,6 +494,118 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_GuardOnTheRowParameterAfterAProjection_ThrowsNotSupported()
+	{
+		// once a Select has projected, the parameter stands for a value that may be null,
+		// so the guard on it is meaningful and the non-nullable member cannot hold its null
+		var query = CreateQuery<TreeNode>()
+			.From("nodes")
+			.Select(n => n.Child!)
+			.Select(n => new EagerNestedDocument { Host = n == null ? null! : new NestedSelectionHost { Name = n.Name } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*not declared nullable*");
+	}
+
+	[Test]
+	public void Select_GuardWhoseBranchReadsThroughACast_IsUnwrapped()
+	{
+		// the guarded path and the path the branch reads are the same member behind a
+		// cast, so the branch reads through it and the guard is dropped
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs")
+			.Select(l => new { N = ((NestedSelectionDocument)(object)l).Host == null ? null : new { ((NestedSelectionDocument)(object)l).Host!.Name } })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs
+            | RENAME host.name AS n.name
+            | KEEP n.name
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardOverArithmeticOnTheGuardedPath_IsUnwrapped()
+	{
+		// arithmetic is null over a null operand, like the functions, so an operand that
+		// reads through the path carries the null through
+		var esql = CreateQuery<NestedSelectionDocument>()
+			.From("logs")
+			.Select(l => new { Len = l.Host == null ? null : new { Longer = l.Host.Name.Length + 1 } })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs
+            | EVAL len.longer = (LENGTH(host.name) + 1)
+            | KEEP len.longer
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardOverACoalesceOnTheGuardedPath_ThrowsNotSupported()
+	{
+		// ?? answers over a null rather than propagating it, so the branch does not read
+		// through the path and the guard stands
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs")
+			.Select(l => new { V = l.Host == null ? null : new { N = l.Host.Name ?? "x" } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
+	}
+
+	[Test]
+	public void Select_ConditionalTestingNullWithoutGuardingAPath_TranslatesWithIsNull()
+	{
+		// not a guard over a path the branch reads, so it is a plain CASE: the test is
+		// IS NULL, where the C# operator would answer null for every row
+#pragma warning disable IDE0029 // the "== null ? :" form is the shape under test; ?? would translate down another path
+		var esql = CreateQuery<LogEntry>()
+			.From("logs")
+			.Select(l => new { V = l.ClientIp == null ? "none" : l.ClientIp })
+			.ToString();
+#pragma warning restore IDE0029
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs
+            | EVAL v = CASE WHEN (clientIp IS NULL) THEN "none" ELSE clientIp END
+            | KEEP v
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardWhoseNullIsBehindAConvert_IsUnwrapped()
+	{
+		// a hand-built tree types the null literal by wrapping it in a Convert, which is
+		// unwrapped rather than reaching the fallback and emitting a "== null" comparison
+		var parameter = Expression.Parameter(typeof(NestedSelectionDocument), "l");
+		var host = Expression.Property(parameter, nameof(NestedSelectionDocument.Host));
+		var guard = Expression.Condition(
+			Expression.Equal(host, Expression.Constant(null, typeof(NestedSelectionHost))),
+			Expression.Convert(Expression.Constant(null, typeof(object)), typeof(string)),
+			Expression.Property(host, nameof(NestedSelectionHost.Name)));
+		var selector = Expression.Lambda<Func<NestedSelectionDocument, NestedSelectionGeo>>(
+			Expression.MemberInit(
+				Expression.New(typeof(NestedSelectionGeo)),
+				Expression.Bind(typeof(NestedSelectionGeo).GetProperty(nameof(NestedSelectionGeo.City))!, guard)),
+			parameter);
+
+		var esql = CreateQuery<NestedSelectionDocument>().From("logs").Select(selector).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs
+            | RENAME host.name AS city
+            | KEEP city
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Select_GuardOnTheLookupSideOfAJoin_IsKeptUnlessTheBranchReadsThroughIt()
 	{
 		// a row with no match leaves the lookup parameter null, unlike the document row,
@@ -497,6 +619,6 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
 	}
 }

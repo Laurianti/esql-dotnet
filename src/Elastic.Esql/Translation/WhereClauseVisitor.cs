@@ -1220,119 +1220,89 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static readonly ConcurrentDictionary<MemberInfo, bool> MissingByMember = new();
 
 	/// <summary>
+	/// The nullability the compiler recorded for a member or a parameter: 2 for annotated
+	/// as nullable, 1 for annotated as not, 0 or null for oblivious, which a consumer
+	/// building without nullable reference types leaves everywhere.
+	/// <para>
+	/// The annotation sits on the member itself, or on a declaring type as a context when
+	/// every member shares it. Both are read from the attribute data rather than by
+	/// instantiating the attribute, which keeps the check out of the trimmer's way. A
+	/// <c>Nullable&lt;T&gt;</c> is nullable whatever the annotations say, and any other
+	/// value type is not.
+	/// </para>
+	/// </summary>
+	private static byte? NullabilityOf(MemberInfo member)
+	{
+		var type = member switch
+		{
+			PropertyInfo property => property.PropertyType,
+			FieldInfo field => field.FieldType,
+			_ => null
+		};
+
+		if (type is null)
+			return null;
+
+		if (Nullable.GetUnderlyingType(type) is not null)
+			return 2;
+
+		if (type.IsValueType)
+			return 1;
+
+		return NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute")
+			?? ContextNullability(member.DeclaringType);
+	}
+
+	/// <summary>The same for a constructor parameter, which stands for the member it initializes.</summary>
+	private static byte? NullabilityOf(ParameterInfo parameter)
+	{
+		if (Nullable.GetUnderlyingType(parameter.ParameterType) is not null)
+			return 2;
+
+		if (parameter.ParameterType.IsValueType)
+			return 1;
+
+		return NullableFlag(parameter.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute")
+			?? NullableFlag(parameter.Member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute")
+			?? ContextNullability(parameter.Member.DeclaringType);
+	}
+
+	/// <summary>The nullable context a declaring type carries, walking out to its own declaring types.</summary>
+	private static byte? ContextNullability(Type? declaringType)
+	{
+		for (var declaring = declaringType; declaring is not null; declaring = declaring.DeclaringType)
+		{
+			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
+
+			if (context is not null)
+				return context;
+		}
+
+		return null;
+	}
+
+	// The answer for a member never changes, and reading it walks the member's attribute
+	// data and its declaring types.
+	private static readonly ConcurrentDictionary<MemberInfo, byte?> NullabilityByMember = new();
+
+	/// <summary>
 	/// Whether a guard belongs on the member: everything except one the compiler states is
 	/// never null. A guard on a column that is never null is a no-op, while a missing one
 	/// changes the rows, so an unannotated member, as an anonymous type's is, is guarded.
 	/// </summary>
 	private static bool CanBeMissing(MemberInfo member) =>
-		MissingByMember.GetOrAdd(member, ComputeCanBeMissing);
-
-	private static bool ComputeCanBeMissing(MemberInfo member)
-	{
-		var type = member switch
-		{
-			PropertyInfo property => property.PropertyType,
-			FieldInfo field => field.FieldType,
-			_ => null
-		};
-
-		if (type is null)
-			return true;
-
-		if (Nullable.GetUnderlyingType(type) is not null)
-			return true;
-
-		if (type.IsValueType)
-			return false;
-
-		var own = NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
-
-		if (own is not null)
-			return own != 1;
-
-		for (var declaring = member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
-		{
-			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
-
-			if (context is not null)
-				return context != 1;
-		}
-
-		return true;
-	}
+		NullabilityByMember.GetOrAdd(member, NullabilityOf) != 1;
 
 	/// <summary>
-	/// Whether the member is declared nullable: a <c>Nullable&lt;T&gt;</c>, or a reference
-	/// annotated as nullable. A projection asks this of the member it assigns, to know
-	/// whether the null a dropped guard produces has a place to go.
+	/// Whether the member can hold the null a dropped guard produces: only an explicit
+	/// non-nullable annotation says it cannot. An oblivious member, which a consumer
+	/// building with nullable reference types disabled has everywhere, can.
 	/// </summary>
-	internal static bool IsDeclaredNullable(MemberInfo member)
-	{
-		var type = member switch
-		{
-			PropertyInfo property => property.PropertyType,
-			FieldInfo field => field.FieldType,
-			_ => null
-		};
+	internal static bool IsDeclaredNullable(MemberInfo member) =>
+		NullabilityByMember.GetOrAdd(member, NullabilityOf) != 1;
 
-		if (type is null)
-			return false;
-
-		if (Nullable.GetUnderlyingType(type) is not null)
-			return true;
-
-		if (type.IsValueType)
-			return false;
-
-		var own = NullableFlag(member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
-
-		if (own is not null)
-			return own == 2;
-
-		for (var declaring = member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
-		{
-			var context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
-
-			if (context is not null)
-				return context == 2;
-		}
-
-		return false;
-	}
-
-	/// <summary>
-	/// The same for a constructor parameter, which stands for the member it initializes:
-	/// its own attribute first, then the context of the constructor and of its declaring
-	/// types.
-	/// </summary>
-	internal static bool IsDeclaredNullable(ParameterInfo parameter)
-	{
-		if (Nullable.GetUnderlyingType(parameter.ParameterType) is not null)
-			return true;
-
-		if (parameter.ParameterType.IsValueType)
-			return false;
-
-		var own = NullableFlag(parameter.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableAttribute");
-
-		if (own is not null)
-			return own == 2;
-
-		var context = NullableFlag(parameter.Member.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
-
-		if (context is not null)
-			return context == 2;
-
-		for (var declaring = parameter.Member.DeclaringType; declaring is not null; declaring = declaring.DeclaringType)
-		{
-			context = NullableFlag(declaring.GetCustomAttributesData(), "System.Runtime.CompilerServices.NullableContextAttribute");
-
-			if (context is not null)
-				return context == 2;
-		}
-
-		return false;
-	}
+	/// <summary>The same for a constructor parameter.</summary>
+	internal static bool IsDeclaredNullable(ParameterInfo parameter) => NullabilityOf(parameter) != 1;
 
 	/// <summary>
 	/// The first nullability flag carried by the named attribute: 2 for annotated

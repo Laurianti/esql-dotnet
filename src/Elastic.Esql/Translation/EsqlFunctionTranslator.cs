@@ -4,6 +4,7 @@
 
 using System.Globalization;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Text;
 using Elastic.Esql.Functions;
 
@@ -468,10 +469,17 @@ internal static class EsqlFunctionTranslator
 
 	/// <summary>
 	/// Whether the ES|QL function the call translates to is null when an input is null,
-	/// which every scalar function is except those marked
-	/// <see cref="AnswersOverNullAttribute"/>. A projection relies on this to drop a null
-	/// guard around a function of the guarded path.
+	/// which a projection relies on to drop a null guard around a function of the guarded
+	/// path. A marker says so with <see cref="EsqlFunctionAttribute.PropagatesNull"/>, and
+	/// one that does not is taken to answer over the null, so the guard is kept.
+	/// <para>
+	/// A <c>Math</c> or <c>string</c> method carries no marker and answers true: every one
+	/// the translator accepts is null over a null input, and one it does not accept fails
+	/// at translation anyway. #53 moves the switches onto the markers' own attribute, and
+	/// these methods with them.
+	/// </para>
 	/// </summary>
 	internal static bool PropagatesNull(MethodCallExpression call) =>
-		!call.Method.IsDefined(typeof(AnswersOverNullAttribute), inherit: false);
+		call.Method.DeclaringType != typeof(EsqlFunctions)
+		|| call.Method.GetCustomAttribute<EsqlFunctionAttribute>(inherit: false)?.PropagatesNull == true;
 }

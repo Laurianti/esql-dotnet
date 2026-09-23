@@ -537,10 +537,12 @@ The result selector supports computed fields, renames, and null guards:
 // | EVAL lang = TO_UPPER(languageName)
 // | KEEP msg, lang
 
-// Null guard → unwraps to simple field access
+// Null guard → dropped, since the branch reads through the guarded path
 (outer, inner) => new { LanguageName = inner == null ? null : inner.LanguageName }
 // | KEEP languageName
 ```
+
+A guard on the lookup side is dropped only when the branch it guards reads through the guarded path: a row with no match leaves the column null, which is the null the guard produces. A branch that reads elsewhere, as in `inner == null ? null : outer.Message`, keeps its own condition and is refused, since dropping it would give an unmatched row a value.
 
 ### Chaining multiple joins
 

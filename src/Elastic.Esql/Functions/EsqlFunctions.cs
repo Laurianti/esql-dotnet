@@ -19,27 +19,35 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Returns the current date and time. Translates to NOW().</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DateTime Now() => Throw<DateTime>();
 
 	/// <summary>Truncates a date to the specified unit. Translates to DATE_TRUNC(unit, field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DateTime DateTrunc(string unit, DateTime field) => Throw<DateTime>();
 
 	/// <summary>Formats a date according to the pattern. Translates to DATE_FORMAT(field, pattern).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string DateFormat(DateTime field, string pattern) => Throw<string>();
 
 	/// <summary>Returns the difference between two dates. Translates to DATE_DIFF(unit, start, end).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int DateDiff(string unit, DateTime start, DateTime end) => Throw<int>();
 
 	/// <summary>Parses a date string using the specified pattern. Translates to DATE_PARSE(pattern, dateString).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DateTime DateParse(string pattern, string dateString) => Throw<DateTime>();
 
 	/// <summary>Returns the day name. Translates to DAY_NAME(date).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string DayName(DateTime date) => Throw<string>();
 
 	/// <summary>Returns the month name. Translates to MONTH_NAME(date).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string MonthName(DateTime date) => Throw<string>();
 
 	/// <summary>Creates a time range. Translates to TRANGE(start, end).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static object TRange(DateTime start, DateTime end) => Throw<object>();
 
 	// ============================================================================
@@ -47,93 +55,123 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Returns the length of a string. Translates to LENGTH(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int Length(string field) => Throw<int>();
 
 	/// <summary>Returns a substring. Translates to SUBSTRING(field, start).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Substring(string field, int start) => Throw<string>();
 
 	/// <summary>Returns a substring. Translates to SUBSTRING(field, start, length).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Substring(string field, int start, int length) => Throw<string>();
 
 	/// <summary>Trims whitespace from both sides. Translates to TRIM(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Trim(string field) => Throw<string>();
 
 	/// <summary>Trims leading whitespace. Translates to LTRIM(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Ltrim(string field) => Throw<string>();
 
 	/// <summary>Trims trailing whitespace. Translates to RTRIM(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Rtrim(string field) => Throw<string>();
 
 	/// <summary>Converts to lowercase. Translates to TO_LOWER(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string ToLower(string field) => Throw<string>();
 
 	/// <summary>Converts to uppercase. Translates to TO_UPPER(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string ToUpper(string field) => Throw<string>();
 
 	/// <summary>Concatenates strings. Translates to CONCAT(a, b, ...).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Concat(params string[] values) => Throw<string>();
 
 	/// <summary>Replaces occurrences of a substring. Translates to REPLACE(s, old, new).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Replace(string field, string oldValue, string newValue) => Throw<string>();
 
 	/// <summary>Finds the position of a substring. Translates to LOCATE(s, substr).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int Locate(string field, string substring) => Throw<int>();
 
 	/// <summary>Finds the position of a substring starting from a position. Translates to LOCATE(s, substr, start).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int Locate(string field, string substring, int start) => Throw<int>();
 
 	/// <summary>Returns the leftmost n characters. Translates to LEFT(s, n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Left(string field, int length) => Throw<string>();
 
 	/// <summary>Returns the rightmost n characters. Translates to RIGHT(s, n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Right(string field, int length) => Throw<string>();
 
 	/// <summary>Reverses a string. Translates to REVERSE(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Reverse(string field) => Throw<string>();
 
 	/// <summary>Repeats a string n times. Translates to REPEAT(s, n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Repeat(string field, int count) => Throw<string>();
 
 	/// <summary>Returns a string of n spaces. Translates to SPACE(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Space(int count) => Throw<string>();
 
 	/// <summary>Splits a string by delimiter. Translates to SPLIT(s, delim).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string[] Split(string field, string delimiter) => Throw<string[]>();
 
 	/// <summary>Returns the bit length of a string. Translates to BIT_LENGTH(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int BitLength(string field) => Throw<int>();
 
 	/// <summary>Returns the byte length of a string. Translates to BYTE_LENGTH(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int ByteLength(string field) => Throw<int>();
 
 	/// <summary>Chunks a string into pieces. Translates to CHUNK(s, size).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string[] Chunk(string field, int size) => Throw<string[]>();
 
 	/// <summary>Decodes a base64 string. Translates to FROM_BASE64(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string FromBase64(string field) => Throw<string>();
 
 	/// <summary>Encodes a string to base64. Translates to TO_BASE64(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string ToBase64(string field) => Throw<string>();
 
 	/// <summary>Hashes a string with the specified algorithm. Translates to HASH(algo, s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Hash(string algorithm, string input) => Throw<string>();
 
 	/// <summary>Computes MD5 hash. Translates to MD5(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Md5(string field) => Throw<string>();
 
 	/// <summary>Computes SHA1 hash. Translates to SHA1(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Sha1(string field) => Throw<string>();
 
 	/// <summary>Computes SHA256 hash. Translates to SHA256(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Sha256(string field) => Throw<string>();
 
 	/// <summary>URL-encodes a string. Translates to URL_ENCODE(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string UrlEncode(string field) => Throw<string>();
 
 	/// <summary>URL-encodes a string component. Translates to URL_ENCODE_COMPONENT(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string UrlEncodeComponent(string field) => Throw<string>();
 
 	/// <summary>URL-decodes a string. Translates to URL_DECODE(s).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string UrlDecode(string field) => Throw<string>();
 
 	// ============================================================================
@@ -141,13 +179,14 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Performs a full-text match. Translates to MATCH(field, query).</summary>
-	[AnswersOverNull]
 	public static bool Match(string field, string query) => Throw<bool>();
 
 	/// <summary>Performs a LIKE pattern match. Translates to field LIKE pattern.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool Like(string field, string pattern) => Throw<bool>();
 
 	/// <summary>Performs a regex pattern match. Translates to field RLIKE pattern.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool Rlike(string field, string pattern) => Throw<bool>();
 
 	// ============================================================================
@@ -155,15 +194,12 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Checks if a value is null. Translates to field IS NULL.</summary>
-	[AnswersOverNull]
 	public static bool IsNull<T>(T field) => Throw<bool>();
 
 	/// <summary>Checks if a value is not null. Translates to field IS NOT NULL.</summary>
-	[AnswersOverNull]
 	public static bool IsNotNull<T>(T field) => Throw<bool>();
 
 	/// <summary>Returns the first non-null value. Translates to COALESCE(a, b, ...).</summary>
-	[AnswersOverNull]
 	public static T Coalesce<T>(params T[] values) => Throw<T>();
 
 	// ============================================================================
@@ -171,78 +207,103 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Returns the absolute value. Translates to ABS(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Abs(double field) => Throw<double>();
 
 	/// <summary>Returns the ceiling. Translates to CEIL(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Ceil(double field) => Throw<double>();
 
 	/// <summary>Returns the floor. Translates to FLOOR(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Floor(double field) => Throw<double>();
 
 	/// <summary>Rounds a number. Translates to ROUND(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Round(double field) => Throw<double>();
 
 	/// <summary>Rounds a number to decimals. Translates to ROUND(n, decimals).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Round(double field, int decimals) => Throw<double>();
 
 	/// <summary>Returns the arccosine. Translates to ACOS(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Acos(double n) => Throw<double>();
 
 	/// <summary>Returns the arcsine. Translates to ASIN(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Asin(double n) => Throw<double>();
 
 	/// <summary>Returns the arctangent. Translates to ATAN(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Atan(double n) => Throw<double>();
 
 	/// <summary>Returns the two-argument arctangent. Translates to ATAN2(y, x).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Atan2(double y, double x) => Throw<double>();
 
 	/// <summary>Returns the cube root. Translates to CBRT(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Cbrt(double n) => Throw<double>();
 
 	/// <summary>Returns the cosine. Translates to COS(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Cos(double n) => Throw<double>();
 
 	/// <summary>Returns the hyperbolic cosine. Translates to COSH(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Cosh(double n) => Throw<double>();
 
 	/// <summary>Returns the sine. Translates to SIN(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Sin(double n) => Throw<double>();
 
 	/// <summary>Returns the hyperbolic sine. Translates to SINH(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Sinh(double n) => Throw<double>();
 
 	/// <summary>Returns the tangent. Translates to TAN(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Tan(double n) => Throw<double>();
 
 	/// <summary>Returns the hyperbolic tangent. Translates to TANH(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Tanh(double n) => Throw<double>();
 
 	/// <summary>Returns e raised to a power. Translates to EXP(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Exp(double n) => Throw<double>();
 
 	/// <summary>Returns the hypotenuse. Translates to HYPOT(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Hypot(double a, double b) => Throw<double>();
 
 	/// <summary>Returns the sign of a number. Translates to SIGNUM(n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Signum(double n) => Throw<double>();
 
 	/// <summary>Copies the sign of one number to another. Translates to COPY_SIGN(magnitude, sign).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double CopySign(double magnitude, double sign) => Throw<double>();
 
 	/// <summary>Scales a floating-point number by a power of two. Translates to SCALB(n, exp).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double ScaleB(double n, int exp) => Throw<double>();
 
 	/// <summary>Rounds to a specified number of decimal places. Translates to ROUND_TO(n, dp).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double RoundTo(double n, int decimalPlaces) => Throw<double>();
 
 	/// <summary>Returns Euler's number. Translates to E().</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double E() => Throw<double>();
 
 	/// <summary>Returns pi. Translates to PI().</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Pi() => Throw<double>();
 
 	/// <summary>Returns tau (2*pi). Translates to TAU().</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Tau() => Throw<double>();
 
 	// ============================================================================
@@ -250,6 +311,7 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Clamps a value between min and max. Translates to CLAMP(n, min, max).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Clamp(double n, double min, double max) => Throw<double>();
 
 	// ============================================================================
@@ -257,24 +319,24 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Performs a phrase match. Translates to MATCH_PHRASE(field, phrase).</summary>
-	[AnswersOverNull]
 	public static bool MatchPhrase(string field, string phrase) => Throw<bool>();
 
 	/// <summary>Performs a KQL query. Translates to KQL(query).</summary>
-	[AnswersOverNull]
 	public static bool Kql(string query) => Throw<bool>();
 
 	/// <summary>Performs a query string query. Translates to QSTR(query).</summary>
-	[AnswersOverNull]
 	public static bool Qstr(string query) => Throw<bool>();
 
 	/// <summary>Returns the relevance score. Translates to SCORE().</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Score() => Throw<double>();
 
 	/// <summary>Applies a decay function. Translates to DECAY(function, field, origin, scale, ...).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Decay(string function, string field, string origin, string scale) => Throw<double>();
 
 	/// <summary>Returns top snippets for a field. Translates to TOP_SNIPPETS(field, n).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string TopSnippets(string field, int count) => Throw<string>();
 
 	// ============================================================================
@@ -282,10 +344,11 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Checks if an IP matches a CIDR range. Translates to CIDR_MATCH(ip, cidr).</summary>
-	[AnswersOverNull]
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool CidrMatch(string ip, string cidr) => Throw<bool>();
 
 	/// <summary>Returns the IP prefix. Translates to IP_PREFIX(ip, prefixLength, ipVersion).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string IpPrefix(string ip, int prefixLength, int ipVersion) => Throw<string>();
 
 	// ============================================================================
@@ -293,24 +356,31 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Casts to integer. Translates to field::integer.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int CastToInteger<T>(T field) => Throw<int>();
 
 	/// <summary>Casts to long. Translates to field::long.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static long CastToLong<T>(T field) => Throw<long>();
 
 	/// <summary>Casts to double. Translates to field::double.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double CastToDouble<T>(T field) => Throw<double>();
 
 	/// <summary>Casts to boolean. Translates to field::boolean.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool CastToBoolean<T>(T field) => Throw<bool>();
 
 	/// <summary>Casts to keyword. Translates to field::keyword.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string CastToKeyword<T>(T field) => Throw<string>();
 
 	/// <summary>Casts to datetime. Translates to field::datetime.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DateTime CastToDatetime<T>(T field) => Throw<DateTime>();
 
 	/// <summary>Casts to IP. Translates to field::ip.</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string CastToIp<T>(T field) => Throw<string>();
 
 	// ============================================================================
@@ -318,15 +388,19 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Buckets values into groups. Translates to BUCKET(field, buckets).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static T Bucket<T>(T field, int buckets) => Throw<T>();
 
 	/// <summary>Buckets values using a span expression. Translates to BUCKET(field, span).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static T Bucket<T>(T field, string span) => Throw<T>();
 
 	/// <summary>Time-based bucketing. Translates to TBUCKET(field, span).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DateTime TBucket(DateTime field, string span) => Throw<DateTime>();
 
 	/// <summary>Categorizes text values. Translates to CATEGORIZE(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static string Categorize(string field) => Throw<string>();
 
 	// ============================================================================
@@ -334,45 +408,59 @@ public static class EsqlFunctions
 	// ============================================================================
 
 	/// <summary>Count distinct values. Translates to COUNT_DISTINCT(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static int CountDistinct<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<int>();
 
 	/// <summary>Median value. Translates to MEDIAN(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Median<TSource>(IEnumerable<TSource> source, Func<TSource, double> selector) => Throw<double>();
 
 	/// <summary>Median absolute deviation. Translates to MEDIAN_ABSOLUTE_DEVIATION(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double MedianAbsoluteDeviation<TSource>(IEnumerable<TSource> source, Func<TSource, double> selector) => Throw<double>();
 
 	/// <summary>Percentile value. Translates to PERCENTILE(field, pct).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Percentile<TSource>(IEnumerable<TSource> source, Func<TSource, double> selector, double percentile) => Throw<double>();
 
 	/// <summary>Standard deviation. Translates to STD_DEV(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double StdDev<TSource>(IEnumerable<TSource> source, Func<TSource, double> selector) => Throw<double>();
 
 	/// <summary>Variance. Translates to VARIANCE(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double Variance<TSource>(IEnumerable<TSource> source, Func<TSource, double> selector) => Throw<double>();
 
 	/// <summary>Weighted average. Translates to WEIGHTED_AVG(field, weight).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double WeightedAvg<TSource>(IEnumerable<TSource> source, Func<TSource, double> valueSelector, Func<TSource, double> weightSelector) => Throw<double>();
 
 	/// <summary>Top N values. Translates to TOP(field, n, order).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static TField[] Top<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector, int count, string order) => Throw<TField[]>();
 
 	/// <summary>All distinct values. Translates to VALUES(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static TField[] Values<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<TField[]>();
 
 	/// <summary>First value by sort order. Translates to FIRST(field, sort).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static TField First<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<TField>();
 
 	/// <summary>Last value by sort order. Translates to LAST(field, sort).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static TField Last<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<TField>();
 
 	/// <summary>Random sample. Translates to SAMPLE(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static TField Sample<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<TField>();
 
 	/// <summary>True if field is absent from all rows. Translates to ABSENT(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool Absent<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<bool>();
 
 	/// <summary>True if field is present in any row. Translates to PRESENT(field).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static bool Present<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<bool>();
 
 	// ============================================================================
@@ -385,31 +473,35 @@ public static class EsqlFunctions
 	/// <c>T = byte</c> for both <c>element_type: "byte"</c> and <c>element_type: "bit"</c>. The vector
 	/// converter handles signed-byte wire semantics for <c>byte</c> vectors automatically.
 	/// </remarks>
-	[AnswersOverNull]
 	public static bool Knn<T>(DenseVector<T> field, DenseVector<T> query) where T : struct => Throw<bool>();
 
 	/// <summary>
 	/// Approximate k-nearest-neighbour search with typed <see cref="KnnOptions"/>. Translates to
 	/// KNN(field, query, { ... }) where each set property renders as its snake_case ES|QL counterpart.
 	/// </summary>
-	[AnswersOverNull]
 	public static bool Knn<T>(DenseVector<T> field, DenseVector<T> query, KnnOptions options) where T : struct => Throw<bool>();
 
 	/// <summary>Generates a query vector from text using the given inference endpoint. Translates to TEXT_EMBEDDING(text, inferenceId).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static DenseVector<float> TextEmbedding(string text, string inferenceId) => Throw<DenseVector<float>>();
 
 	/// <summary>Cosine similarity between two float dense vectors. Translates to V_COSINE(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double VCosine(DenseVector<float> a, DenseVector<float> b) => Throw<double>();
 
 	/// <summary>Dot product between two float dense vectors. Translates to V_DOT_PRODUCT(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double VDotProduct(DenseVector<float> a, DenseVector<float> b) => Throw<double>();
 
 	/// <summary>Hamming distance between two byte dense vectors. Translates to V_HAMMING(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double VHamming(DenseVector<byte> a, DenseVector<byte> b) => Throw<double>();
 
 	/// <summary>L1 (Manhattan) norm between two float dense vectors. Translates to V_L1_NORM(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double VL1Norm(DenseVector<float> a, DenseVector<float> b) => Throw<double>();
 
 	/// <summary>L2 (Euclidean) norm between two float dense vectors. Translates to V_L2_NORM(a, b).</summary>
+	[EsqlFunction(PropagatesNull = true)]
 	public static double VL2Norm(DenseVector<float> a, DenseVector<float> b) => Throw<double>();
 }
