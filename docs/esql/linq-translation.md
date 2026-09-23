@@ -139,6 +139,19 @@ query.Where(l => levels.Contains(l.Level))
 .Where(l => string.IsNullOrEmpty(l.Tag))       // WHERE (tag IS NULL OR tag == "")
 ```
 
+### String ordering
+
+`string.CompareOrdinal(a, b)` and `string.Compare(a, b, StringComparison.Ordinal)` compared with zero translate to the relational operator, which is what keyset pagination over a string key needs. A field that can be missing has its side of the ordering spelled out, since .NET orders null first where ES|QL would drop the row.
+
+```csharp
+.Where(l => string.CompareOrdinal(l.Message, "m") > 0)                       // WHERE message > "m"
+.Where(l => string.Compare(l.ClientIp, "m", StringComparison.Ordinal) < 0)   // WHERE (clientIp IS NULL OR clientIp < "m")
+```
+
+`CompareTo` and the two-argument `Compare` order by the current culture and are refused. The value compared against must hold no surrogate pair and no character at or above U+E000, the only range where the UTF-16 ordering of .NET and the UTF-8 ordering of Elasticsearch disagree; otherwise the comparison is refused rather than answered with the wrong order.
+
+Four more shapes are refused: two fields compared with each other, which leaves no value to look at; an expression of a field that can be missing, whose value for a missing field is not the field's null; a projected row, which has no field name of its own; and a property with a `JsonConverter`, whose field holds what the converter writes rather than the value the comparison was given.
+
 ### Captured variables and parameterization
 
 Captured C# variables are inlined by default:

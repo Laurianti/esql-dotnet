@@ -147,7 +147,7 @@ public class NullCheckTests : EsqlTestBase
 		// guard is refused rather than folded into a constant that would drop every row
 		var query = CreateQuery<TreeNode>()
 			.From("nodes")
-			.Fork(b => b.Select(n => n.Child).Take(1), b => b.Take(1))
+			.Fork(b => b.Select(n => n.Child!).Take(1), b => b.Take(1))
 			.Where(n => n == null);
 
 		var act = () => query.ToString();
