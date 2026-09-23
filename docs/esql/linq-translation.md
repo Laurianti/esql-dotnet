@@ -152,6 +152,26 @@ query.Where(l => levels.Contains(l.Level))
 
 Four more shapes are refused: two fields compared with each other, which leaves no value to look at; an expression of a field that can be missing, whose value for a missing field is not the field's null; a projected row, which has no field name of its own; and a property with a `JsonConverter`, whose field holds what the converter writes rather than the value the comparison was given.
 
+### Multi-value fields
+
+A field that holds more than one value is tested as a whole, with the function that answers the test over every value at once.
+
+```csharp
+.Where(p => p.Tags.Any(t => t == "water"))      // WHERE MATCH(tags, "water")
+.Where(p => p.Tags.Contains("water"))           // WHERE MATCH(tags, "water")
+.Where(p => p.Tags.Any())                       // WHERE COALESCE(MV_COUNT(tags), 0) > 0
+.Where(p => p.Ratings.Any(r => r > 3))          // WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
+.Where(p => p.Ratings.All(r => r > 3))          // WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
+```
+
+`All` over equality asks for one distinct value that matches, since every value being equal to the same one means there is only one: `MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(...)`. A missing field is an empty sequence, where `All` holds and `Any` does not, and each translation says so explicitly rather than leaving the predicate null.
+
+Any property typed as an `IEnumerable<T>` is accepted, a set and an interface included. No collection instance exists when the query is translated, so a comparer on one is as invisible as a `StringComparison` on a scalar: the comparison is the one the store performs, not the one the collection would.
+
+On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
+
+A test that holds for one value at a time, such as `StartsWith`, is refused: it needs the field read position by position, which the functions above do not do.
+
 ### Captured variables and parameterization
 
 Captured C# variables are inlined by default:
