@@ -86,7 +86,7 @@ public class KeepDropTests : EsqlTestBase
 	{
 		var esql = CreateQuery<NestedSelectionDocument>()
 			.From("logs-*")
-			.Keep(l => l.Host.Name, l => l.Host.Geo.City, l => l.Agent.Name)
+			.Keep(l => l.Host!.Name, l => l.Host!.Geo!.City, l => l.Agent!.Name)
 			.ToString();
 
 		_ = esql.Should().Be(

@@ -339,6 +339,22 @@ query
 // | KEEP message
 ```
 
+### Null-guarded nested projections
+
+A selection of a nested object usually arrives guarded, the shape a GraphQL layer emits for `parent { child }`. The guard is dropped and the leaves are projected, which is exact because a branch whose leaf columns are all null is omitted from the row, so the member falls back to its default:
+
+```csharp
+query.Select(l => new LogDto
+{
+    Host = l.Host == null ? null : new HostDto { Name = l.Host.Name }
+})
+// | KEEP host.name
+```
+
+The guard has to read through the path it tests: `l.Host == null ? null : new HostDto { Name = l.Agent.Name }` is refused, since dropping it would give a value to a row that has no host.
+
+Two consequences are worth stating. A parent that exists but whose projected leaves are all null comes back as null, the same as a missing parent, because the row carries nothing to tell the two apart. And the member has to be able to hold that null, so it cannot be declared non-nullable, while a member without an annotation, as a consumer building without nullable reference types has everywhere, passes; the "without an initializer" half of that condition cannot be checked at translation time, so `HostDto? Host { get; set; } = new()` yields an empty object rather than null.
+
 ## KEEP and DROP extensions
 
 In addition to `.Select()`, explicit `.Keep()` and `.Drop()` extension methods are available for fine-grained control:
@@ -521,10 +537,12 @@ The result selector supports computed fields, renames, and null guards:
 // | EVAL lang = TO_UPPER(languageName)
 // | KEEP msg, lang
 
-// Null guard → unwraps to simple field access
+// Null guard → dropped, since the branch reads through the guarded path
 (outer, inner) => new { LanguageName = inner == null ? null : inner.LanguageName }
 // | KEEP languageName
 ```
+
+A guard on the lookup side is dropped only when the branch it guards reads through the guarded path: a row with no match leaves the column null, which is the null the guard produces. A branch that reads elsewhere, as in `inner == null ? null : outer.Message`, keeps its own condition and is refused, since dropping it would give an unmatched row a value.
 
 ### Chaining multiple joins
 

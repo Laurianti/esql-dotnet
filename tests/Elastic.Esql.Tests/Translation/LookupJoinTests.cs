@@ -909,7 +909,7 @@ public class LookupJoinTests : EsqlTestBase
 				lookup,
 				outer => outer.Message,
 				inner => inner.Message,
-				(outer, inner) => new { OuterHostName = outer.Host.Name, InnerHostName = inner.Host.Name }
+				(outer, inner) => new { OuterHostName = outer.Host!.Name, InnerHostName = inner.Host!.Name }
 			)
 			.ToString();
 
