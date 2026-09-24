@@ -665,10 +665,26 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return false;
 	}
 
+	/// <summary>
+	/// Whether the call is a Contains overload that takes an equality comparer, as its
+	/// last parameter. The comparison emitted is the one Elasticsearch performs, which
+	/// the comparer would not follow.
+	/// </summary>
+	private static bool TakesAnEqualityComparer(MethodCallExpression node) =>
+		node.Method.GetParameters() is [.., { ParameterType: { IsGenericType: true } last }]
+		&& last.GetGenericTypeDefinition() == typeof(IEqualityComparer<>);
+
+	private static NotSupportedException ContainsWithAnEqualityComparer() => new(
+		"Contains with an equality comparer is not supported: the emitted comparison is the one "
+		+ "Elasticsearch performs, which the comparer would not follow. Call Contains without one.");
+
 	private static bool TryGetContainsArguments(MethodCallExpression node, out Expression valueExpression, out IEnumerable? collection)
 	{
 		valueExpression = null!;
 		collection = null;
+
+		if (TakesAnEqualityComparer(node))
+			throw ContainsWithAnEqualityComparer();
 
 		if (node.Method.IsStatic)
 		{
@@ -1339,6 +1355,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 		}
 	}
+
 	/// <summary>
 	/// Predicates over a multi-value document field: <c>field.Any(...)</c>,
 	/// <c>field.All(...)</c> and <c>field.Contains(value)</c>. A document holds every
@@ -1391,6 +1408,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// for a comparison the translation cannot honour
 		if (methodName == "Contains")
 		{
+			if (TakesAnEqualityComparer(node))
+				throw ContainsWithAnEqualityComparer();
+
 			var expectedArguments = node.Method.IsStatic ? 2 : 1;
 
 			return node.Arguments.Count == expectedArguments
@@ -1406,116 +1426,124 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (predicate is null)
 			return false;
 
-		return TryAppendQuantified(source, methodName == "All", predicate.Value);
+		return TryAppendQuantified(source, all: methodName == "All", predicate.Value);
 	}
 
 	/// <summary>
 	/// Reads the body of the lambda passed to Any/All as one predicate on the element.
 	/// Null guards on the element are dropped, since a stored value is never null.
 	/// </summary>
-	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated)
-	{
-		switch (body)
+	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated) =>
+		body switch
 		{
-			case UnaryExpression { NodeType: ExpressionType.Not } negation:
-				return TryParseElementPredicate(negation.Operand, element, negated: !negated);
+			UnaryExpression { NodeType: ExpressionType.Not } negation =>
+				TryParseElementPredicate(negation.Operand, element, negated: !negated),
 
 			// "x != null && P(x)" is P(x)
-			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Left, element, ExpressionType.NotEqual):
-				return TryParseElementPredicate(conjunction.Right, element, negated: negated);
+			BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Left, element, ExpressionType.NotEqual) =>
+				TryParseElementPredicate(conjunction.Right, element, negated: negated),
 
-			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Right, element, ExpressionType.NotEqual):
-				return TryParseElementPredicate(conjunction.Left, element, negated: negated);
+			BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Right, element, ExpressionType.NotEqual) =>
+				TryParseElementPredicate(conjunction.Left, element, negated: negated),
 
 			// "x == null || P(x)" is P(x)
-			case BinaryExpression { NodeType: ExpressionType.OrElse } disjunction when IsNullGuard(disjunction.Left, element, ExpressionType.Equal):
-				return TryParseElementPredicate(disjunction.Right, element, negated: negated);
+			BinaryExpression { NodeType: ExpressionType.OrElse } disjunction when IsNullGuard(disjunction.Left, element, ExpressionType.Equal) =>
+				TryParseElementPredicate(disjunction.Right, element, negated: negated),
 
-			case BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison:
-				{
-					var value = comparison.Left == element ? comparison.Right
-						: comparison.Right == element ? comparison.Left
-						: null;
+			BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison =>
+				TryParseElementEquality(comparison, element, negated),
 
-					if (value is null || !TryGetConstant(value, out var constant))
-						return null;
-
-					var isEqual = comparison.NodeType == ExpressionType.Equal;
-					return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
-				}
-
-			case BinaryExpression
+			BinaryExpression
 			{
 				NodeType: ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
 					or ExpressionType.LessThan or ExpressionType.LessThanOrEqual
-			} ordering:
-				{
-					// "10 < x" is "x > 10": keep the element on the left
-					var elementOnLeft = ordering.Left == element;
-					var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
+			} ordering => TryParseElementOrdering(ordering, element, negated),
 
-					if (value is null || !TryGetConstant(value, out var constant))
-						return null;
+			MethodCallExpression call => TryParseElementCall(call, element, negated),
 
-					var kind = (ordering.NodeType, elementOnLeft) switch
-					{
-						(ExpressionType.GreaterThan, true) or (ExpressionType.LessThan, false) => ElementPredicateKind.GreaterThan,
-						(ExpressionType.GreaterThanOrEqual, true) or (ExpressionType.LessThanOrEqual, false) => ElementPredicateKind.GreaterThanOrEqual,
-						(ExpressionType.LessThan, true) or (ExpressionType.GreaterThan, false) => ElementPredicateKind.LessThan,
-						_ => ElementPredicateKind.LessThanOrEqual
-					};
+			_ => null
+		};
 
-					return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
-				}
+	/// <summary><c>x == v</c> or <c>x != v</c>, with the element on either side.</summary>
+	private static ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, bool negated)
+	{
+		var value = comparison.Left == element ? comparison.Right
+			: comparison.Right == element ? comparison.Left
+			: null;
 
-			case MethodCallExpression call:
-				{
-					// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
-					// StringComparison: either way the test holds for one value at a time
-					if (call.Object == element
-						&& call.Method.DeclaringType == typeof(string)
-						&& (call.Arguments.Count == 1
-							|| (call.Arguments.Count == 2 && call.Arguments[1].Type == typeof(StringComparison))))
-					{
-						if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
-							|| !TryGetConstant(call.Arguments[0], out var constant))
-							return null;
+		if (value is null || !TryGetConstant(value, out var constant))
+			return null;
 
-						return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
-					}
+		var isEqual = comparison.NodeType == ExpressionType.Equal;
+		return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
+	}
 
-					// values.Contains(x), over a constant collection
-					if (TryGetContainsArguments(call, out var valueExpression, out var collection)
-						&& valueExpression == element
-						&& collection is not null)
-					{
-						// enumerating the collection loses the equality it was built with: a set
-						// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
-						// which the emitted comparison does not reproduce
-						if (!UsesDefaultEquality(collection))
-						{
-							throw new NotSupportedException(
-								$"Contains over a {TypeName(collection.GetType())} is not supported: a set, a dictionary "
-								+ "or a collection type of your own may compare its values in a way of its own, "
-								+ "which the emitted comparison would not follow. Pass an array, a List or a "
-								+ "LINQ query, which compare with default equality.");
-						}
+	/// <summary><c>x &gt; v</c> and the other orderings, with the element on either side.</summary>
+	private static ElementPredicate? TryParseElementOrdering(BinaryExpression ordering, ParameterExpression element, bool negated)
+	{
+		// "10 < x" is "x > 10": keep the element on the left
+		var elementOnLeft = ordering.Left == element;
+		var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
 
-						var candidates = collection.Cast<object?>().ToList();
+		if (value is null || !TryGetConstant(value, out var constant))
+			return null;
 
-						// a stored value is never null, and MATCH(field, null) is not valid ES|QL
-						if (candidates.Any(candidate => candidate is null))
-							return null;
+		var kind = (ordering.NodeType, elementOnLeft) switch
+		{
+			(ExpressionType.GreaterThan, true) or (ExpressionType.LessThan, false) => ElementPredicateKind.GreaterThan,
+			(ExpressionType.GreaterThanOrEqual, true) or (ExpressionType.LessThanOrEqual, false) => ElementPredicateKind.GreaterThanOrEqual,
+			(ExpressionType.LessThan, true) or (ExpressionType.GreaterThan, false) => ElementPredicateKind.LessThan,
+			_ => ElementPredicateKind.LessThanOrEqual
+		};
 
-						return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
-					}
+		return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
+	}
 
-					return null;
-				}
-
-			default:
+	/// <summary>
+	/// A call on the element, <c>x.StartsWith("a")</c> and the like, or membership of the
+	/// element in a constant collection, <c>values.Contains(x)</c>.
+	/// </summary>
+	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, bool negated)
+	{
+		// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
+		// StringComparison: either way the test holds for one value at a time
+		if (call.Object == element
+			&& call.Method.DeclaringType == typeof(string)
+			&& (call.Arguments.Count == 1
+				|| (call.Arguments.Count == 2 && call.Arguments[1].Type == typeof(StringComparison))))
+		{
+			if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
+				|| !TryGetConstant(call.Arguments[0], out var constant))
 				return null;
+
+			return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
 		}
+
+		// values.Contains(x), over a constant collection
+		if (!TryGetContainsArguments(call, out var valueExpression, out var collection)
+			|| valueExpression != element
+			|| collection is null)
+			return null;
+
+		// enumerating the collection loses the equality it was built with: a set
+		// holding "IOT" under an ordinal-ignore-case comparer contains "iot",
+		// which the emitted comparison does not reproduce
+		if (!UsesDefaultEquality(collection))
+		{
+			throw new NotSupportedException(
+				$"Contains over a {TypeName(collection.GetType())} is not supported: a set, a dictionary "
+				+ "or a collection type of your own may compare its values in a way of its own, "
+				+ "which the emitted comparison would not follow. Pass an array, a List or a "
+				+ "LINQ query, which compare with default equality.");
+		}
+
+		var candidates = collection.Cast<object?>().ToList();
+
+		// a stored value is never null, and MATCH(field, null) is not valid ES|QL
+		if (candidates.Any(candidate => candidate is null))
+			return null;
+
+		return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
 	}
 
 	/// <summary>
@@ -1549,12 +1577,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					return true;
 				}
 
-				// each value adds one level to the expression, as each position does
-				if (predicate.Values.Count > MaxMultiValuePositions)
+				// each value adds one level to the expression
+				if (predicate.Values.Count > MaxMatchedValues)
 				{
 					throw new NotSupportedException(
 						$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
-						+ $"a level to the expression Elasticsearch parses, and at most {MaxMultiValuePositions} fit.");
+						+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
 				}
 
 				if (predicate.Values.Count > 1)
@@ -1608,8 +1636,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				}
 
 			// StartsWith and the rest test one value at a time, which needs the field read
-			// position by position: that is the next part, and the shape is refused until
-			// it lands rather than answered by a test that reads the whole field.
+			// position by position: the shape is refused rather than answered by a test that
+			// reads the whole field.
 			default:
 				throw new NotSupportedException(
 					$"A predicate over the individual values of {name} is not supported: MATCH, MV_MIN, "
@@ -1720,10 +1748,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// How many positions of a multi-value field a predicate may read. Each one adds a
-	/// level to the expression Elasticsearch parses, and it stops accepting them past this.
+	/// How many values of a collection an Any over it may test, each with its own MATCH.
+	/// Each one adds a level to the expression Elasticsearch parses, and it stops
+	/// accepting them past this.
 	/// </summary>
-	private const int MaxMultiValuePositions = 256;
+	private const int MaxMatchedValues = 256;
 
 	private static Expression StripQuotes(Expression expression)
 	{

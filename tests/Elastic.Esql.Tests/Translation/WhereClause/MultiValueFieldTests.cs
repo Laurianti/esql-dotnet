@@ -315,7 +315,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	public void Where_AnyWithAPerValuePredicate_ThrowsNotSupported()
 	{
 		// StartsWith holds for one value at a time, which needs the field read position by
-		// position: that is the next part
+		// position, and no function reads the field that way
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
@@ -323,5 +323,33 @@ public class MultiValueFieldTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values*");
+	}
+
+	[Test]
+	public void Where_FieldContainsWithAnEqualityComparer_ThrowsNotSupported()
+	{
+		// MATCH compares the way the field is indexed, which the comparer would not follow
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("IOT", StringComparer.OrdinalIgnoreCase));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*equality comparer*");
+	}
+
+	[Test]
+	public void Where_AnyOverAContainsWithAnEqualityComparer_ThrowsNotSupported()
+	{
+		// the comparer was dropped and the values matched case-sensitively
+		string[] wanted = ["IOT", "WATER"];
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t, StringComparer.OrdinalIgnoreCase)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*equality comparer*");
 	}
 }
