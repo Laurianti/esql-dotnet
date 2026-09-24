@@ -173,7 +173,16 @@ Any property typed as an `IEnumerable<T>` is accepted, a set and an interface in
 
 On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
 
-A test that holds for one value at a time, such as `StartsWith`, is refused: it needs the field read position by position, which the functions above do not do.
+A test that holds for one value at a time, such as `StartsWith`, needs the field read position by position. How many positions to read is stated with `Take(n)` on the field, which already means "the first n" in LINQ. Each position is read with `MV_SLICE` and tested on its own:
+
+```csharp
+.Where(p => p.Tags.Take(4).Any(t => t.StartsWith("wat")))
+// WHERE (COALESCE(STARTS_WITH(MV_SLICE(tags, 0, 0), "wat"), false) OR ... OR COALESCE(STARTS_WITH(MV_SLICE(tags, 3, 3), "wat"), false))
+.Where(p => p.Tags.Take(3).Any(t => t == "water"))
+// WHERE (COALESCE(MV_SLICE(tags, 0, 0) == "water", false) OR ... OR COALESCE(MV_SLICE(tags, 2, 2) == "water", false))
+```
+
+With `Take(n)` every predicate reads the first n values, equality and comparisons included, so a document is answered on those values whatever it holds past them. The first n are the first n as ES|QL returns them, which for a keyword or numeric field is sorted order, the order the materialized list has as well. Each position adds a level to the expression Elasticsearch parses, so at most 256 are read. A text predicate honours `StringComparison.Ordinal` and refuses any other comparison, as a single field does. Without `Take(n)` a test that holds for one value at a time is refused rather than read with a number chosen for you.
 
 Five more shapes are refused: a `Contains` that takes an equality comparer, which the comparison Elasticsearch performs would not follow; membership in a captured set, dictionary or collection type of your own, which may compare its values in a way of its own, where an array, a `List` or a LINQ query compares with default equality; membership in more than 256 values, each of which adds a level to the expression Elasticsearch parses; a collection written through a `JsonConverter`, on the property, on its type or among the serializer's converters, whose field holds what the converter writes rather than the values compared; and a collection of objects, for which ES|QL has a column for each field of the objects and none for the objects themselves.
 
