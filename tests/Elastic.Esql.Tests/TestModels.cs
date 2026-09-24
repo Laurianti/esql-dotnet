@@ -132,6 +132,10 @@ public class TaggedProduct
 	public List<string> Categories { get; set; } = [];
 
 	public List<int> Ratings { get; set; } = [];
+
+	public List<uint> Counts { get; set; } = [];
+
+	public List<double> Weights { get; set; } = [];
 }
 
 /// <summary>Document whose tags are a set: a set answers Contains by its own comparer.</summary>

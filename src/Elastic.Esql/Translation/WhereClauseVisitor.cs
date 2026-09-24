@@ -1390,6 +1390,31 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is not null && node.Method.DeclaringType == typeof(MemoryExtensions))
 			source = TryUnwrapMemoryExtensionsSource(source);
 
+		// "field.Take(n).Any(p)" means "any of the first n", which is what reading the
+		// field position by position computes: the bound belongs to the one predicate
+		// that states it, so it travels with the source rather than in the context
+		var positions = (int?)null;
+		if (source is MethodCallExpression { Method.Name: nameof(Enumerable.Take), Arguments.Count: 2 } take
+			&& take.Method.DeclaringType == typeof(Enumerable))
+		{
+			if (!TryGetConstant(take.Arguments[1], out var taken) || taken is not int count || count < 1)
+			{
+				throw new NotSupportedException(
+					"Take on a multi-value field takes a constant count of at least one: the number of "
+					+ "positions to read has to be fixed when the query is written.");
+			}
+
+			if (count > MaxPredicateTerms)
+			{
+				throw new NotSupportedException(
+					$"Take({count}) on a multi-value field is not supported: each position adds a level "
+					+ $"to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
+			}
+
+			positions = count;
+			source = take.Arguments[0];
+		}
+
 		if (source is null || !IsMultiValueField(source))
 			return false;
 
@@ -1440,8 +1465,27 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 			var expectedArguments = node.Method.IsStatic ? 2 : 1;
 
-			return node.Arguments.Count == expectedArguments
-				&& TryAppendMatch(source, node.Arguments[^1]);
+			if (node.Arguments.Count != expectedArguments)
+				return false;
+
+			// "field.Take(n).Contains(v)" is "one of the first n values is v", which MATCH
+			// over the whole field does not answer
+			if (positions is { } count)
+			{
+				var value = node.Arguments[^1];
+
+				if (!TryGetConstant(value, out var constant) || constant is null)
+					return false;
+
+				AppendValuePattern(
+					ResolveMultiValueField(source),
+					all: false,
+					new ElementPredicate(ElementPredicateKind.Equal, [constant], Negated: false, [CapturedName(value)]),
+					count);
+				return true;
+			}
+
+			return TryAppendMatch(source, node.Arguments[^1]);
 		}
 
 		var argument = node.Arguments[^1];
@@ -1453,7 +1497,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (predicate is null)
 			return false;
 
-		return TryAppendQuantified(source, all: methodName == "All", predicate.Value);
+		return TryAppendQuantified(source, all: methodName == "All", predicate.Value, positions);
 	}
 
 	/// <summary>
@@ -1533,7 +1577,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, bool negated)
 	{
 		// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
-		// StringComparison: either way the test holds for one value at a time
+		// StringComparison: either way the test holds for one value at a time, and only
+		// an ordinal one can be honoured, as for a single field
 		if (call.Object == element
 			&& call.Method.DeclaringType == typeof(string)
 			&& (call.Arguments.Count == 1
@@ -1542,6 +1587,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
 				|| !TryGetConstant(call.Arguments[0], out var constant))
 				return null;
+
+			EsqlFunctionTranslator.ThrowIfUnsupportedStringComparison(call);
 
 			return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(call.Arguments[0])]);
 		}
@@ -1576,8 +1623,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// Any(P) and All(P) over the values of a field. A negated predicate is pushed into
 	/// the quantifier, since Any(not P) is "not All(P)" and All(not P) is "not Any(P)".
+	/// With Take(n) on the field every predicate is read over the first n positions,
+	/// since that is what the quantifier ranges over; without it over the whole field.
 	/// </summary>
-	private bool TryAppendQuantified(Expression field, bool all, ElementPredicate predicate)
+	private bool TryAppendQuantified(Expression field, bool all, ElementPredicate predicate, int? positions)
 	{
 		var name = ResolveMultiValueField(field);
 
@@ -1588,6 +1637,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ = _builder.Append("NOT ");
 			all = !all;
 			predicate = predicate with { Negated = false };
+		}
+
+		if (positions is { } count)
+		{
+			AppendValuePattern(name, all: all, predicate, count);
+			return true;
 		}
 
 		switch (predicate.Kind)
@@ -1605,11 +1660,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				}
 
 				// each value adds one level to the expression
-				if (predicate.Values.Count > MaxMatchedValues)
+				if (predicate.Values.Count > MaxPredicateTerms)
 				{
 					throw new NotSupportedException(
 						$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
-						+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
+						+ $"a level to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
 				}
 
 				AppendPresentMatches(name, [.. Enumerable.Range(0, predicate.Values.Count).Select(i => RenderValue(predicate, i))]);
@@ -1629,13 +1684,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				{
 					var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
 					var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
-					var op = predicate.Kind switch
-					{
-						ElementPredicateKind.GreaterThan => ">",
-						ElementPredicateKind.GreaterThanOrEqual => ">=",
-						ElementPredicateKind.LessThan => "<",
-						_ => "<="
-					};
+					var op = ComparisonOperator(predicate.Kind);
 
 					// MV_MIN and MV_MAX are null over a missing field, and so would be the
 					// whole predicate, which then answers neither true nor false. A missing
@@ -1649,17 +1698,26 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					return true;
 				}
 
-			// StartsWith and the rest test one value at a time, which needs the field read
-			// position by position: the shape is refused rather than answered by a test that
-			// reads the whole field.
+			// StartsWith and the rest hold for one value at a time, which needs the field
+			// read position by position; how many positions is what Take(n) states
 			default:
 				throw new NotSupportedException(
-					$"A predicate over the individual values of {name} is not supported: MATCH, MV_MIN, "
-					+ "MV_MAX and MV_COUNT answer a test over the field as a whole, and a test such as "
-					+ "StartsWith holds for one value at a time. Compare the values with equality, or "
-					+ "test the field with one of the supported comparisons.");
+						$"A predicate over the individual values of {name} is not supported without a "
+						+ "bound: MATCH, MV_MIN, MV_MAX and MV_COUNT answer a test over the field as a "
+						+ "whole, and a test such as StartsWith holds for one value at a time, which "
+						+ "reads the field position by position. State how many with Take(n) on the "
+						+ "field, as in Tags.Take(4).Any(t => t.StartsWith(\"wat\")).");
 		}
 	}
+
+	private static string ComparisonOperator(ElementPredicateKind kind) => kind switch
+	{
+		ElementPredicateKind.GreaterThan => ">",
+		ElementPredicateKind.GreaterThanOrEqual => ">=",
+		ElementPredicateKind.LessThan => "<",
+		ElementPredicateKind.LessThanOrEqual => "<=",
+		_ => "=="
+	};
 
 	private bool TryAppendMatch(Expression field, Expression value)
 	{
@@ -1796,11 +1854,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// How many values of a collection an Any over it may test, each with its own MATCH.
-	/// Each one adds a level to the expression Elasticsearch parses, and it stops
-	/// accepting them past this.
+	/// How many terms a multi-value predicate may join: the positions Take(n) reads, the
+	/// values of a captured collection, or both together. Each one adds a level to the
+	/// expression Elasticsearch parses, and it stops accepting them past this.
 	/// </summary>
-	private const int MaxMatchedValues = 256;
+	private const int MaxPredicateTerms = 256;
 
 	private static Expression StripQuotes(Expression expression)
 	{
@@ -1877,5 +1935,111 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		expression is MemberExpression { Expression: ConstantExpression or MemberExpression } member
 			? member.Member.Name
 			: null;
+
+	/// <summary>
+	/// A predicate over the first <paramref name="positions"/> values of a field, as many
+	/// as Take(n) states. ES|QL applies a comparison or a scalar function to one value, not
+	/// to every value of a field at once, but MV_SLICE reads a value by position, so the
+	/// test is written out once per position and combined: any of them for Any, all of them
+	/// for All. A field holding more values is answered on its first ones, which is what
+	/// Take reads.
+	/// </summary>
+	private void AppendValuePattern(string field, bool all, ElementPredicate predicate, int positions)
+	{
+		// All over an empty list holds only for the empty field; Any never does
+		if (predicate.Kind == ElementPredicateKind.In && predicate.Values.Count == 0)
+		{
+			_ = _builder.Append(all ? field + " IS NULL" : "false");
+			return;
+		}
+
+		// under In the values are written out inside every position as an OR chain, and
+		// a chain of n values adds n - 1 levels to the positions' own; any other predicate
+		// tests one value per position and adds none
+		if (predicate.Kind == ElementPredicateKind.In && positions + predicate.Values.Count - 1 > MaxPredicateTerms)
+		{
+			throw new NotSupportedException(
+				$"{positions} positions and {predicate.Values.Count} values together are more than the expression "
+				+ $"Elasticsearch parses allows: at most {MaxPredicateTerms} of both.");
+		}
+
+		// Rendered once, before the positions, so a captured value becomes one parameter
+		// rather than one per position. A Contains pattern is a LIKE literal with its
+		// wildcards escaped.
+		var rendered = Enumerable.Range(0, predicate.Values.Count)
+			.Select(index => predicate.Kind == ElementPredicateKind.Contains
+				? EsqlFormatting.FormatString(
+					$"*{EscapeLikePattern(Convert.ToString(predicate.Values[index], CultureInfo.InvariantCulture) ?? "")}*")
+				: RenderValue(predicate, index))
+			.ToList();
+
+		// the positions are one term of whatever encloses them
+		if (positions > 1)
+			_ = _builder.Append('(');
+
+		for (var position = 0; position < positions; position++)
+		{
+			if (position > 0)
+				_ = _builder.Append(all ? " AND " : " OR ");
+
+			var value = $"MV_SLICE({field}, {position}, {position})";
+
+			// Past the last value MV_SLICE is null, and so would be the test, leaving
+			// the whole predicate undefined instead of answering either way. An absent
+			// value satisfies All and does not satisfy Any, so it is spelled out: the
+			// result then stays definite under an enclosing NOT.
+			_ = _builder.Append("COALESCE(");
+
+			if (all)
+				_ = _builder.Append(value).Append(" IS NULL OR ");
+
+			AppendValuePredicate(value, predicate.Kind, rendered);
+
+			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
+		}
+
+		if (positions > 1)
+			_ = _builder.Append(')');
+	}
+
+	/// <summary>
+	/// The test on one value. A comparison is made on the value as it is stored, so any
+	/// type ES|QL compares is read the same way; a text predicate reads a string.
+	/// </summary>
+	private void AppendValuePredicate(string value, ElementPredicateKind kind, IReadOnlyList<string> rendered)
+	{
+		switch (kind)
+		{
+			case ElementPredicateKind.StartsWith:
+				_ = _builder.Append("STARTS_WITH(").Append(value).Append(", ").Append(rendered[0]).Append(')');
+				break;
+
+			case ElementPredicateKind.EndsWith:
+				_ = _builder.Append("ENDS_WITH(").Append(value).Append(", ").Append(rendered[0]).Append(')');
+				break;
+
+			case ElementPredicateKind.Contains:
+				_ = _builder.Append(value).Append(" LIKE ").Append(rendered[0]);
+				break;
+
+			case ElementPredicateKind.In:
+				_ = _builder.Append('(');
+
+				for (var i = 0; i < rendered.Count; i++)
+				{
+					if (i > 0)
+						_ = _builder.Append(" OR ");
+
+					_ = _builder.Append(value).Append(" == ").Append(rendered[i]);
+				}
+
+				_ = _builder.Append(')');
+				break;
+
+			default:
+				_ = _builder.Append(value).Append(' ').Append(ComparisonOperator(kind)).Append(' ').Append(rendered[0]);
+				break;
+		}
+	}
 
 }
