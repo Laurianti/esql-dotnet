@@ -2,7 +2,6 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -164,7 +163,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 				var resultField = _context.ResolveFieldName(declaringType, member);
 				_ = anonymousFieldNames?.Add(resultField);
 
-				ClassifyProjectionMember(resultField, arg, targetCanHoldNull: () => CanHoldNull(member), targetName: member.Name);
+				ClassifyProjectionMember(resultField, arg, target: member, targetName: member.Name);
 			}
 
 			if (anonymousFieldNames is not null)
@@ -193,7 +192,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 			// the constructor's parameter is the member here: its own nullability says
 			// whether the null a dropped guard produces can reach the row
-			ClassifyProjectionMember(EsqlIdentifier.EscapeColumnName(jsonProp.Name), node.Arguments[i], targetCanHoldNull: () => CanHoldNull(parameters[i]), targetName: paramName);
+			ClassifyProjectionMember(
+				EsqlIdentifier.EscapeColumnName(jsonProp.Name),
+				node.Arguments[i],
+				target: parameters[i],
+				targetName: paramName);
 		}
 
 		return node;
@@ -207,7 +210,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var declaringType = assignment.Member.DeclaringType ?? node.Type;
 				var resultField = _context.ResolveFieldName(declaringType, assignment.Member);
-				ClassifyProjectionMember(resultField, assignment.Expression, targetCanHoldNull: () => CanHoldNull(assignment.Member), targetName: assignment.Member.Name);
+				ClassifyProjectionMember(
+					resultField,
+					assignment.Expression,
+					target: assignment.Member,
+					targetName: assignment.Member.Name);
 			}
 		}
 
@@ -233,12 +240,12 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		return node;
 	}
 
-	private void ClassifyProjectionMember(string resultField, Expression sourceExpression, Func<bool> targetCanHoldNull, string? targetName)
+	private void ClassifyProjectionMember(string resultField, Expression sourceExpression, ICustomAttributeProvider target, string? targetName)
 	{
 		// A null-guarded nested projection, the shape a GraphQL layer emits for
 		// "parent { child }": param == null ? null : new Child { Field = param.Child.Field }
 		if (sourceExpression is ConditionalExpression guarded
-			&& TryUnwrapNullGuard(guarded, out var guardedBranch, out var guardedChildPath)
+			&& TryUnwrapNullGuard(guarded, out var guardedBranch, out var guardedChildPath, propagatingNull: true)
 			&& guardedBranch is MemberInitExpression or NewExpression)
 		{
 			// Dropping the guard leaves no column to say the child is missing: a missing
@@ -249,7 +256,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// the guard is redundant rather than meaningful, and dropping it changes
 			// nothing about what reaches the row. The lookup side of a join is null for a
 			// row with no match, so a guard there is meaningful like any other.
-			if (!IsRowThatIsNeverNull(guardedChildPath) && !targetCanHoldNull())
+			if (!IsRowThatIsNeverNull(guardedChildPath) && !CanHoldNull(target))
 			{
 				throw new NotSupportedException(
 					$"A null guard around {targetName} cannot be translated: the member is not declared "
@@ -264,7 +271,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		if (sourceExpression is UnaryExpression { NodeType: ExpressionType.Convert } unary && IsNullableCast(unary))
 		{
 			// the cast says nothing about the member: the target keeps its own nullability
-			ClassifyProjectionMember(resultField, unary.Operand, targetCanHoldNull: targetCanHoldNull, targetName: targetName);
+			ClassifyProjectionMember(resultField, unary.Operand, target: target, targetName: targetName);
 			return;
 		}
 
@@ -329,7 +336,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			}
 		}
 		else if (sourceExpression is ConditionalExpression conditional
-			&& TryUnwrapNullGuard(conditional, out var nonNullBranch, out var guardedValuePath)
+			&& TryUnwrapNullGuard(conditional, out var nonNullBranch, out var guardedValuePath, propagatingNull: true)
 			&& IsSimpleFieldAccess(nonNullBranch))
 		{
 			// A scalar needs no refusal here: the column is null for a missing value either
@@ -337,7 +344,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// "Message = l.Host!.Name" does. Only a child object differs, where null and
 			// an empty object are not the same thing.
 
-			ClassifyProjectionMember(resultField, nonNullBranch, targetCanHoldNull: targetCanHoldNull, targetName: targetName);
+			ClassifyProjectionMember(resultField, nonNullBranch, target: target, targetName: targetName);
 		}
 		else if (sourceExpression is BinaryExpression or MethodCallExpression or ConditionalExpression or ConstantExpression)
 		{
@@ -355,7 +362,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			{
 				var member = newExpression.Members[i];
 				var nestedResultField = BuildNestedResultField(resultField, member, newExpression.Type);
-				ClassifyProjectionMember(nestedResultField, newExpression.Arguments[i], targetCanHoldNull: () => CanHoldNull(newExpression.Members[i]), targetName: newExpression.Members[i].Name);
+				ClassifyProjectionMember(
+					nestedResultField,
+					newExpression.Arguments[i],
+					target: newExpression.Members[i],
+					targetName: newExpression.Members[i].Name);
 			}
 
 			return true;
@@ -369,7 +380,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 					continue;
 
 				var nestedResultField = BuildNestedResultField(resultField, assignment.Member, memberInitExpression.Type);
-				ClassifyProjectionMember(nestedResultField, assignment.Expression, targetCanHoldNull: () => CanHoldNull(assignment.Member), targetName: assignment.Member.Name);
+				ClassifyProjectionMember(
+					nestedResultField,
+					assignment.Expression,
+					target: assignment.Member,
+					targetName: assignment.Member.Name);
 			}
 
 			return true;
@@ -395,11 +410,18 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	/// tested: otherwise the guard says nothing about what the branch reads, and dropping
 	/// it would give a missing parent a value.
 	/// </para>
+	/// <para>
+	/// With <paramref name="propagatingNull"/> the branch has to carry a null of the path
+	/// through as well, since the guard is dropped and the null it produced has to come
+	/// from the branch. Without it the branch has only to read the path, which is enough
+	/// for the CASE fold: that keeps the test, as IS NOT NULL over the branch's columns.
+	/// </para>
 	/// </summary>
-	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch) =>
-		TryUnwrapNullGuard(conditional, out nonNullBranch, out _);
-
-	private bool TryUnwrapNullGuard(ConditionalExpression conditional, out Expression nonNullBranch, out Expression guardedPath)
+	private bool TryUnwrapNullGuard(
+		ConditionalExpression conditional,
+		out Expression nonNullBranch,
+		out Expression guardedPath,
+		bool propagatingNull)
 	{
 		guardedPath = null!;
 		nonNullBranch = null!;
@@ -446,7 +468,7 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		// join, where a row with no match leaves it null. Then it is held to the same rule
 		// as a member path.
 		if ((guarded is MemberExpression || _context.HasProjected || IsJoinLookupParameter(guarded))
-			&& !ReadsThrough(branch, guarded))
+			&& !ReadsThrough(branch, guarded, propagatingNull))
 			return false;
 
 		nonNullBranch = branch;
@@ -475,33 +497,32 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		&& parameter != _outerParameter;
 
 	/// <summary>
-	/// Whether a member can hold the null a dropped guard produces: one declared as a
-	/// nullable reference, or one of an anonymous type, which has no initializer to
-	/// keep. A member declared non-nullable would come back as its default instead.
+	/// Whether the target of a projection member can hold the null a dropped guard
+	/// produces: any except one declared non-nullable, which would come back as its
+	/// default instead. An anonymous type's properties carry no annotation, so they can.
+	/// The target is the member, or the constructor parameter that stands for one.
 	/// </summary>
-	private static bool CanHoldNull(MemberInfo member) =>
-		CanHoldNullByMember.GetOrAdd(
-			member,
-			static m => (m.DeclaringType is { } declaring && declaring.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false))
-				|| WhereClauseVisitor.IsDeclaredNullable(m));
+	private static bool CanHoldNull(ICustomAttributeProvider target) => target switch
+	{
+		MemberInfo member => WhereClauseVisitor.IsDeclaredNullable(member),
+		ParameterInfo parameter => WhereClauseVisitor.IsDeclaredNullable(parameter),
+		_ => throw new NotSupportedException($"A projection member cannot be a {target.GetType().Name}.")
+	};
 
-	// The answer for a member never changes, and reading it walks the declaring type's
-	// attributes as well as the member's own.
-	private static readonly ConcurrentDictionary<MemberInfo, bool> CanHoldNullByMember = new();
-
-	/// <summary>The same for a constructor parameter, which stands for the member it initializes.</summary>
-	private static bool CanHoldNull(ParameterInfo parameter) => WhereClauseVisitor.IsDeclaredNullable(parameter);
-
-	/// <summary>Whether every member path in the expression goes through <paramref name="path"/>.</summary>
-	private bool ReadsThrough(Expression expression, Expression path)
+	/// <summary>
+	/// Whether every member path in the expression goes through <paramref name="path"/>.
+	/// With <paramref name="propagatingNull"/> it has to go through operations that are
+	/// null over a null input, so that a null of the path reaches the result.
+	/// </summary>
+	private bool ReadsThrough(Expression expression, Expression path, bool propagatingNull)
 	{
 		if (SameMemberPath(expression, path))
 			return true;
 
 		return expression switch
 		{
-			MemberExpression member => member.Expression is not null && ReadsThrough(member.Expression, path),
-			UnaryExpression unary => ReadsThrough(unary.Operand, path),
+			MemberExpression member => member.Expression is not null && ReadsThrough(member.Expression, path, propagatingNull),
+			UnaryExpression unary => ReadsThrough(unary.Operand, path, propagatingNull),
 			// a nested init reads through the path only when every member does: a constant
 			// member would be emitted for a missing parent, where the source gives null,
 			// and a child made of constants alone has nothing that reads through at all.
@@ -512,34 +533,34 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			// unwrapped and then emitted without part of itself.
 			MemberInitExpression init => init.Bindings.Count > 0
 				&& init.NewExpression.Arguments.Count == 0
-				&& init.Bindings.All(b => b is MemberAssignment assignment && ReadsThrough(assignment.Expression, path)),
+				&& init.Bindings.All(b => b is MemberAssignment assignment && ReadsThrough(assignment.Expression, path, propagatingNull)),
 			// arithmetic and comparison are null over a null operand, like the functions
-			// above, so a side that reads through the path carries the null through. The
-			// operators that answer over a null, ?? and the short-circuiting pair, do not.
-			BinaryExpression
-			{
-				NodeType: not (ExpressionType.Coalesce or ExpressionType.AndAlso or ExpressionType.OrElse)
-			} binary => ReadsThrough(binary.Left, path) || ReadsThrough(binary.Right, path),
+			// below, so a side that reads through the path carries the null through. The
+			// operators that answer over a null do not: ??, the short-circuiting pair, and a
+			// comparison with null, which renders as IS NULL or IS NOT NULL.
+			BinaryExpression binary when !propagatingNull || PropagatesNull(binary) =>
+				ReadsThrough(binary.Left, path, propagatingNull) || ReadsThrough(binary.Right, path, propagatingNull),
 			// the same for a child built with new, anonymous or by constructor: every
 			// argument has to read through the path, and only a child the nested projection
 			// can emit, since it reads the bindings, so a child built by constructor has
 			// nothing for it to read and would be unwrapped into a shape that fails later
 			NewExpression construction => construction.Members is not null
 				&& construction.Arguments.Count > 0
-				&& construction.Arguments.All(argument => ReadsThrough(argument, path)),
+				&& construction.Arguments.All(argument => ReadsThrough(argument, path, propagatingNull)),
 			// a guarded child of this child, the shape a selection two levels deep takes:
 			// it is null whenever its own guarded path is, and that path goes through this
 			// one, so it reads through as well
-			ConditionalExpression nested => TryUnwrapNullGuard(nested, out _, out var nestedPath)
+			ConditionalExpression nested => TryUnwrapNullGuard(nested, out _, out var nestedPath, propagatingNull)
 				&& nestedPath is MemberExpression
-				&& ReadsThrough(nestedPath, path),
+				&& ReadsThrough(nestedPath, path, propagatingNull),
 			// a call reads through the path when its receiver or one of its arguments does,
 			// provided the function is null over a null input: every scalar function is,
 			// except the few that exist to answer null, which would give a missing parent
 			// a value
-			MethodCallExpression call => EsqlFunctionTranslator.PropagatesNull(call)
-				&& ((call.Object is not null && ReadsThrough(call.Object, path))
-					|| call.Arguments.Any(argument => ReadsThrough(argument, path) || ReadsThroughParams(argument, path))),
+			MethodCallExpression call when !propagatingNull || EsqlFunctionTranslator.PropagatesNull(call) =>
+				(call.Object is not null && ReadsThrough(call.Object, path, propagatingNull))
+				|| call.Arguments.Any(argument => ReadsThrough(argument, path, propagatingNull)
+					|| ReadsThroughParams(argument, path, propagatingNull)),
 			_ => false
 		};
 	}
@@ -549,8 +570,62 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 	/// Concat(a, b): one of them reading through the path is enough, the function being
 	/// null over a null input like any other.
 	/// </summary>
-	private bool ReadsThroughParams(Expression argument, Expression path) =>
-		argument is NewArrayExpression array && array.Expressions.Any(element => ReadsThrough(element, path));
+	private bool ReadsThroughParams(Expression argument, Expression path, bool propagatingNull) =>
+		argument is NewArrayExpression array && array.Expressions.Any(element => ReadsThrough(element, path, propagatingNull));
+
+	/// <summary>
+	/// Whether the operator is null over a null operand: every one except ??, the
+	/// short-circuiting pair, and a comparison with null, which renders as IS NULL or
+	/// IS NOT NULL and answers a null with a boolean.
+	/// </summary>
+	private static bool PropagatesNull(BinaryExpression binary) =>
+		binary.NodeType is not (ExpressionType.Coalesce or ExpressionType.AndAlso or ExpressionType.OrElse)
+		&& !IsNullComparison(binary);
+
+	private static bool IsNullComparison(BinaryExpression binary) =>
+		binary.NodeType is ExpressionType.Equal or ExpressionType.NotEqual
+		&& (IsNullConstant(binary.Left.UnwrapConvertExpressions()) || IsNullConstant(binary.Right.UnwrapConvertExpressions()));
+
+	/// <summary>
+	/// The operation through which the expression reads <paramref name="path"/> while
+	/// answering a null input with a value of its own, named for a refusal, or null when
+	/// there is none: a call not marked as null over a null input, ??, the
+	/// short-circuiting pair, or a comparison with null.
+	/// </summary>
+	private string? FindAnswerOverNull(Expression expression, Expression path)
+	{
+		var finder = new AnswerOverNullFinder(candidate => ReadsThrough(candidate, path, propagatingNull: false));
+		_ = finder.Visit(expression);
+		return finder.Found;
+	}
+
+	private sealed class AnswerOverNullFinder(Func<Expression, bool> readsPath) : ExpressionVisitor
+	{
+		public string? Found { get; private set; }
+
+		public override Expression? Visit(Expression? node)
+		{
+			if (Found is not null || node is null)
+				return node;
+
+			Found = node switch
+			{
+				MethodCallExpression call when !EsqlFunctionTranslator.PropagatesNull(call) && readsPath(call) =>
+					$"\"{call.Method.Name}\"",
+				BinaryExpression binary when !PropagatesNull(binary) && readsPath(binary) => binary.NodeType switch
+				{
+					ExpressionType.Coalesce => "\"??\"",
+					ExpressionType.AndAlso => "\"&&\"",
+					ExpressionType.OrElse => "\"||\"",
+					ExpressionType.Equal => "\"== null\"",
+					_ => "\"!= null\""
+				},
+				_ => null
+			};
+
+			return Found is null ? base.Visit(node) : node;
+		}
+	}
 
 	private static bool SameMemberPath(Expression left, Expression right) =>
 		(left.UnwrapConvertExpressions(), right.UnwrapConvertExpressions()) switch
@@ -778,7 +853,11 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 
 	private string TranslateConditional(ConditionalExpression conditional)
 	{
-		if (TryUnwrapNullGuard(conditional, out var nonNullBranch))
+		// The fold keeps the guard, as IS NOT NULL over the branch's columns, so the branch
+		// has only to read the guarded path, not to carry its null through. A child object
+		// is not folded: it is projected by the nested projection or refused below.
+		if (TryUnwrapNullGuard(conditional, out var nonNullBranch, out _, propagatingNull: false)
+			&& nonNullBranch is not (MemberInitExpression or NewExpression))
 		{
 			var nullCheckFields = ExtractNullCheckFields(nonNullBranch);
 			if (nullCheckFields.Count > 0)
@@ -789,26 +868,34 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 			}
 		}
 
-		// A guard over a path of the row that the branch does not read through cannot be
-		// folded: the CASE below would test the guarded path and answer with a branch that
-		// does not depend on it, giving a missing parent a value. A conditional that tests
-		// null without guarding a path of the row, as in "l.Tag == null ? \"none\" : l.Tag",
-		// is a plain CASE and is emitted, now that the test renders as IS NULL.
-		if (conditional.Test is BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison
-			&& (IsNullConstant(comparison.Left.UnwrapConvertExpressions())
-				|| IsNullConstant(comparison.Right.UnwrapConvertExpressions())))
+		// A guard over a path of the row that is not folded cannot be emitted either: the
+		// CASE below would test the guarded path and answer with a branch that does not
+		// depend on it, giving a missing parent a value. The branch either reads elsewhere,
+		// or reads the path through an operation that answers a null with a value of its
+		// own, and the refusal says which. A conditional that tests null without guarding a
+		// path of the row, as in "l.Tag == null ? \"none\" : l.Tag", is a plain CASE and is
+		// emitted, now that the test renders as IS NULL.
+		if (conditional.Test is BinaryExpression comparison && IsNullComparison(comparison))
 		{
 			var guarded = IsParameterRooted(comparison.Left.UnwrapConvertExpressions()) ? comparison.Left
 				: IsParameterRooted(comparison.Right.UnwrapConvertExpressions()) ? comparison.Right
 				: null;
 
-			if (guarded is not null
-				&& (IsNullConstant(StripNullableConvert(conditional.IfTrue)) || IsNullConstant(StripNullableConvert(conditional.IfFalse))))
+			var branch = IsNullConstant(StripNullableConvert(conditional.IfTrue)) ? StripNullableConvert(conditional.IfFalse)
+				: IsNullConstant(StripNullableConvert(conditional.IfFalse)) ? StripNullableConvert(conditional.IfTrue)
+				: null;
+
+			if (guarded is not null && branch is not null)
 			{
-				throw new NotSupportedException(
-					"A null guard in a projection is only supported when the branch it guards reads "
-					+ "through the tested path, as in "
-					+ "\"p.Child == null ? null : new Dto { Field = p.Child.Field }\".");
+				var answersOverNull = FindAnswerOverNull(branch, guarded);
+
+				throw new NotSupportedException(answersOverNull is null
+					? "A null guard in a projection is only supported when the branch it guards reads "
+						+ "through the tested path, as in "
+						+ "\"p.Child == null ? null : new Dto { Field = p.Child.Field }\"."
+					: $"A null guard in a projection cannot be dropped around {answersOverNull}: it answers "
+						+ "a null input with a value of its own, so a missing parent would come back with "
+						+ "that value rather than null.");
 			}
 		}
 

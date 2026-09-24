@@ -227,7 +227,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*\"Coalesce\"*value of its own*");
 	}
 
 	[Test]
@@ -314,7 +314,7 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*\"Match\"*value of its own*");
 	}
 
 	[Test]
@@ -555,7 +555,34 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads through*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*\"??\"*value of its own*");
+	}
+
+	[Test]
+	public void Select_GuardOverANullComparisonOfTheGuardedPath_ThrowsNotSupported()
+	{
+		// "!= null" renders as IS NOT NULL, which answers a null with false rather than
+		// carrying it through, so a missing host would come back as { Named = false }
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs")
+			.Select(l => new { H = l.Host == null ? null : new { Named = l.Host.Name != null } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*\"!= null\"*value of its own*");
+	}
+
+	[Test]
+	public void Select_GuardOverIsNotNullOfTheGuardedPath_ThrowsNotSupported()
+	{
+		// the marker spelling of the same test is refused the same way
+		var query = CreateQuery<NestedSelectionDocument>()
+			.From("logs")
+			.Select(l => new { H = l.Host == null ? null : new { Named = EsqlFunctions.IsNotNull(l.Host.Name) } });
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*\"IsNotNull\"*value of its own*");
 	}
 
 	[Test]
@@ -602,6 +629,28 @@ public class NullGuardedNestedProjectionTests : EsqlTestBase
             FROM logs
             | RENAME host.name AS city
             | KEEP city
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuardOnTheLookupSideOverAFunctionThatAnswersNull_FoldsIntoACase()
+	{
+		// the fold keeps the guard, as IS NOT NULL over the branch's columns, so the branch
+		// has only to read the lookup side, not to carry its null through
+		var lookup = CreateQuery<LanguageLookup>().From("languages_lookup");
+
+		var esql = CreateQuery<LogEntry>()
+			.From("employees")
+			.LeftJoin(lookup, o => o.StatusCode, i => i.LanguageCode,
+				(o, i) => new { o.Message, V = i == null ? null : EsqlFunctions.Coalesce(i.LanguageName, "x") })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM employees
+            | LOOKUP JOIN languages_lookup ON statusCode == languageCode
+            | EVAL v = CASE WHEN languageName IS NOT NULL THEN COALESCE(languageName, "x") ELSE NULL END
+            | KEEP message, v
             """.NativeLineEndings());
 	}
 

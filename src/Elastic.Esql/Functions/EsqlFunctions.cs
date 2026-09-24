@@ -456,11 +456,9 @@ public static class EsqlFunctions
 	public static TField Sample<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<TField>();
 
 	/// <summary>True if field is absent from all rows. Translates to ABSENT(field).</summary>
-	[EsqlFunction(PropagatesNull = true)]
 	public static bool Absent<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<bool>();
 
 	/// <summary>True if field is present in any row. Translates to PRESENT(field).</summary>
-	[EsqlFunction(PropagatesNull = true)]
 	public static bool Present<TSource, TField>(IEnumerable<TSource> source, Func<TSource, TField> selector) => Throw<bool>();
 
 	// ============================================================================

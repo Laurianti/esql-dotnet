@@ -1214,12 +1214,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// The answer for a member, which never changes: the compiler records the annotation
-	/// once, and reading it walks the member's attribute data and its declaring types.
-	/// </summary>
-	private static readonly ConcurrentDictionary<MemberInfo, bool> MissingByMember = new();
-
-	/// <summary>
 	/// The nullability the compiler recorded for a member or a parameter: 2 for annotated
 	/// as nullable, 1 for annotated as not, 0 or null for oblivious, which a consumer
 	/// building without nullable reference types leaves everywhere.
@@ -1290,8 +1284,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// never null. A guard on a column that is never null is a no-op, while a missing one
 	/// changes the rows, so an unannotated member, as an anonymous type's is, is guarded.
 	/// </summary>
-	private static bool CanBeMissing(MemberInfo member) =>
-		NullabilityByMember.GetOrAdd(member, NullabilityOf) != 1;
+	private static bool CanBeMissing(MemberInfo member) => IsDeclaredNullable(member);
 
 	/// <summary>
 	/// Whether the member can hold the null a dropped guard produces: only an explicit
