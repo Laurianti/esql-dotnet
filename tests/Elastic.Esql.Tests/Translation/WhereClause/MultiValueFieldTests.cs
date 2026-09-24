@@ -318,7 +318,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		// position: that is the next part
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Any(t => t.StartsWith("wat")));
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
 
 		var act = () => query.ToString();
 

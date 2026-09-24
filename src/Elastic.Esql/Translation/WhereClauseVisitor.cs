@@ -1402,7 +1402,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (StripQuotes(argument) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
 
-		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0]);
+		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], negated: false);
 		if (predicate is null)
 			return false;
 
@@ -1413,23 +1413,23 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Reads the body of the lambda passed to Any/All as one predicate on the element.
 	/// Null guards on the element are dropped, since a stored value is never null.
 	/// </summary>
-	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated = false)
+	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated)
 	{
 		switch (body)
 		{
 			case UnaryExpression { NodeType: ExpressionType.Not } negation:
-				return TryParseElementPredicate(negation.Operand, element, !negated);
+				return TryParseElementPredicate(negation.Operand, element, negated: !negated);
 
 			// "x != null && P(x)" is P(x)
 			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Left, element, ExpressionType.NotEqual):
-				return TryParseElementPredicate(conjunction.Right, element, negated);
+				return TryParseElementPredicate(conjunction.Right, element, negated: negated);
 
 			case BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Right, element, ExpressionType.NotEqual):
-				return TryParseElementPredicate(conjunction.Left, element, negated);
+				return TryParseElementPredicate(conjunction.Left, element, negated: negated);
 
 			// "x == null || P(x)" is P(x)
 			case BinaryExpression { NodeType: ExpressionType.OrElse } disjunction when IsNullGuard(disjunction.Left, element, ExpressionType.Equal):
-				return TryParseElementPredicate(disjunction.Right, element, negated);
+				return TryParseElementPredicate(disjunction.Right, element, negated: negated);
 
 			case BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison:
 				{
@@ -1470,8 +1470,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 			case MethodCallExpression call:
 				{
-					// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a")
-					if (call.Object == element && call.Method.DeclaringType == typeof(string) && call.Arguments.Count == 1)
+					// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
+					// StringComparison: either way the test holds for one value at a time
+					if (call.Object == element
+						&& call.Method.DeclaringType == typeof(string)
+						&& (call.Arguments.Count == 1
+							|| (call.Arguments.Count == 2 && call.Arguments[1].Type == typeof(StringComparison))))
 					{
 						if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
 							|| !TryGetConstant(call.Arguments[0], out var constant))
