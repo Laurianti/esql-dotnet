@@ -1594,7 +1594,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			// a document matches MATCH when any of the field's values does
 			case ElementPredicateKind.Equal when !all:
-				AppendMatch(name, RenderValue(predicate, 0));
+				AppendPresentMatches(name, [RenderValue(predicate, 0)]);
 				return true;
 
 			case ElementPredicateKind.In when !all:
@@ -1612,20 +1612,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 						+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
 				}
 
-				if (predicate.Values.Count > 1)
-					_ = _builder.Append('(');
-
-				for (var i = 0; i < predicate.Values.Count; i++)
-				{
-					if (i > 0)
-						_ = _builder.Append(" OR ");
-
-					AppendMatch(name, RenderValue(predicate, i));
-				}
-
-				if (predicate.Values.Count > 1)
-					_ = _builder.Append(')');
-
+				AppendPresentMatches(name, [.. Enumerable.Range(0, predicate.Values.Count).Select(i => RenderValue(predicate, i))]);
 				return true;
 
 			// every value equals v: the field holds one distinct value, and it matches.
@@ -1681,11 +1668,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		var name = CapturedName(value);
 
-		AppendMatch(
+		AppendPresentMatches(
 			ResolveMultiValueField(field),
-			name is null
-				? _context.FormatValue(constant, null)
-				: _context.GetValueOrParameterName(name, constant));
+			[name is null ? _context.FormatValue(constant, null) : _context.GetValueOrParameterName(name, constant)]);
 		return true;
 	}
 
@@ -1754,6 +1739,34 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// exact primitives, and replace this once they are generally available.
 	private void AppendMatch(string field, string renderedValue) =>
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
+
+	/// <summary>
+	/// MATCH over each value, any of them matching, with a document that has no values
+	/// answered false. A shard whose index does not map the field has it replaced by null,
+	/// and MATCH over null is null (elastic/elasticsearch#137430), which an enclosing NOT
+	/// would keep null and so drop the document. Any over an empty sequence is false, and
+	/// it is stated, as for MV_MIN and MV_MAX.
+	/// </summary>
+	private void AppendPresentMatches(string field, IReadOnlyList<string> renderedValues)
+	{
+		_ = _builder.Append('(').Append(field).Append(" IS NOT NULL AND ");
+
+		if (renderedValues.Count > 1)
+			_ = _builder.Append('(');
+
+		for (var i = 0; i < renderedValues.Count; i++)
+		{
+			if (i > 0)
+				_ = _builder.Append(" OR ");
+
+			AppendMatch(field, renderedValues[i]);
+		}
+
+		if (renderedValues.Count > 1)
+			_ = _builder.Append(')');
+
+		_ = _builder.Append(')');
+	}
 
 	private static bool ContainsParameter(Expression expression) => expression switch
 	{

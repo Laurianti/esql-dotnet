@@ -29,7 +29,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "water")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
             """.NativeLineEndings());
 	}
 
@@ -44,7 +44,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "water")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
             """.NativeLineEndings());
 	}
 
@@ -59,7 +59,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "water")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
             """.NativeLineEndings());
 	}
 
@@ -91,7 +91,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(categories, "pumps")
+            | WHERE (categories IS NOT NULL AND MATCH(categories, "pumps"))
             """.NativeLineEndings());
 	}
 
@@ -106,7 +106,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(ratings, 42)
+            | WHERE (ratings IS NOT NULL AND MATCH(ratings, 42))
             """.NativeLineEndings());
 	}
 
@@ -121,7 +121,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (MATCH(tags, "water") OR MATCH(tags, "iot"))
+            | WHERE ((tags IS NOT NULL AND MATCH(tags, "water")) OR (tags IS NOT NULL AND MATCH(tags, "iot")))
             """.NativeLineEndings());
 	}
 
@@ -136,7 +136,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (MATCH(tags, "iot") AND MATCH(tags, "industrial"))
+            | WHERE ((tags IS NOT NULL AND MATCH(tags, "iot")) AND (tags IS NOT NULL AND MATCH(tags, "industrial")))
             """.NativeLineEndings());
 	}
 
@@ -151,7 +151,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE NOT MATCH(tags, "iot")
+            | WHERE NOT (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -166,7 +166,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (MATCH(tags, "water") AND name == "pump")
+            | WHERE ((tags IS NOT NULL AND MATCH(tags, "water")) AND name == "pump")
             """.NativeLineEndings());
 	}
 
@@ -184,7 +184,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, ?tag)
+            | WHERE (tags IS NOT NULL AND MATCH(tags, ?tag))
             """.NativeLineEndings());
 		_ = query.GetParameters()!.Parameters["tag"].GetString().Should().Be("water");
 	}
@@ -254,7 +254,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE NOT MATCH(tags, "iot")
+            | WHERE NOT (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -286,7 +286,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "iot")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -301,7 +301,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "iot")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -316,7 +316,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "iot")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -377,7 +377,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, ?tag)
+            | WHERE (tags IS NOT NULL AND MATCH(tags, ?tag))
             """.NativeLineEndings());
 		_ = query.GetParameters()!.Parameters["tag"].GetString().Should().Be("water");
 	}
@@ -393,7 +393,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "water")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
             """.NativeLineEndings());
 	}
 
@@ -507,7 +507,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
+            | WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
             """.NativeLineEndings());
 	}
 
@@ -569,7 +569,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "iot")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -620,7 +620,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	{
 		var source = new[] { new { Outer = new { Outer = new TaggedProduct() } } }.AsQueryable();
 
-		_ = Translate(source.Where(x => x.Outer.Outer.Tags.Contains("iot"))).Should().Be("MATCH(tags, \"iot\")");
+		_ = Translate(source.Where(x => x.Outer.Outer.Tags.Contains("iot"))).Should().Be("(tags IS NOT NULL AND MATCH(tags, \"iot\"))");
 	}
 
 	[Test]
@@ -677,7 +677,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
+            | WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
             """.NativeLineEndings());
 	}
 
@@ -696,7 +696,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "water")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
             """.NativeLineEndings());
 	}
 
@@ -836,7 +836,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE MATCH(tags, "iot")
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 
@@ -905,8 +905,9 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_NegatedContains_TranslatesToNotMatch()
 	{
-		// MATCH is false, not null, on a document without the field, so the negation keeps
-		// it, as !Contains does over an empty sequence
+		// a document without the field, or on a shard whose index does not map it, answers
+		// the IS NOT NULL false, so the negation keeps it, as !Contains does over an empty
+		// sequence
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => !p.Tags.Contains("iot"))
@@ -915,7 +916,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE NOT MATCH(tags, "iot")
+            | WHERE NOT (tags IS NOT NULL AND MATCH(tags, "iot"))
             """.NativeLineEndings());
 	}
 

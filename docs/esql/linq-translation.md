@@ -159,15 +159,15 @@ Four more shapes are refused: two fields compared with each other, which leaves 
 A field that holds more than one value is tested as a whole, with the function that answers the test over every value at once.
 
 ```csharp
-.Where(p => p.Tags.Any(t => t == "water"))        // WHERE MATCH(tags, "water")
-.Where(p => p.Tags.Contains("water"))             // WHERE MATCH(tags, "water")
+.Where(p => p.Tags.Any(t => t == "water"))        // WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
+.Where(p => p.Tags.Contains("water"))             // WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
 .Where(p => p.Tags.Any())                         // WHERE COALESCE(MV_COUNT(tags), 0) > 0
 .Where(p => p.Ratings.Any(r => r > 3))            // WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
 .Where(p => p.Ratings.All(r => r > 3))            // WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
-.Where(p => p.Tags.Any(t => wanted.Contains(t)))  // WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
+.Where(p => p.Tags.Any(t => wanted.Contains(t)))  // WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
 ```
 
-`All` over equality asks for one distinct value that matches, since every value being equal to the same one means there is only one: `MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(...)`. A missing field is an empty sequence, where `All` holds and `Any` does not, and each translation says so explicitly rather than leaving the predicate null.
+`All` over equality asks for one distinct value that matches, since every value being equal to the same one means there is only one: `MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(...)`. A missing field is an empty sequence, where `All` holds and `Any` does not, and each translation says so explicitly rather than leaving the predicate null. That covers `MATCH` too: a shard whose index does not map the field has it as null, and `MATCH` over null is null, which an enclosing `NOT` would keep null and so drop the document.
 
 Any property typed as an `IEnumerable<T>` is accepted, a set and an interface included; a dictionary is one object in the mapping rather than a field of values, and is not. No collection instance exists when the query is translated, so a comparer on one is as invisible as a `StringComparison` on a scalar: the comparison is the one the store performs, not the one the collection would.
 
