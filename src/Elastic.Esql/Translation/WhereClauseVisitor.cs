@@ -1395,6 +1395,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!IsFrameworkMethod(node.Method))
 			return false;
 
+		// The field holds what the converter writes, and the values compared are emitted as
+		// given: a converter of the collection does not apply to one of its values, so the
+		// two need not meet, and the count of values need not be the one written either.
+		if (_context.Metadata.FindPropertyConverter(EntityPropertyMember(source)) is not null)
+		{
+			throw new NotSupportedException(
+				$"{methodName} over a property with a JsonConverter is not supported: the field holds "
+				+ "what the converter writes, and the values compared are emitted as given, so the "
+				+ "two need not match.");
+		}
+
 		// field.Any() with no predicate: the field simply has to hold a value
 		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
 		{

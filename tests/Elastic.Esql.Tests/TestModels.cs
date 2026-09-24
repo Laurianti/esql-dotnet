@@ -24,6 +24,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(LazyHostRecord))]
 [JsonSerializable(typeof(NestedSelectionHostWithTag))]
 [JsonSerializable(typeof(PrefixedCodeDocument))]
+[JsonSerializable(typeof(ConvertedTagsProduct))]
 [JsonSerializable(typeof(NullableNestedModel))]
 [JsonSerializable(typeof(AddressModel))]
 [JsonSerializable(typeof(SimpleDocument))]
@@ -140,6 +141,23 @@ public class SetTaggedProduct
 public class InterfaceTaggedProduct
 {
 	public ICollection<string> Tags { get; set; } = [];
+}
+
+/// <summary>Writes each tag in its prefixed form, so the field holds values the query was not given.</summary>
+public class PrefixedTagsConverter : JsonConverter<List<string>>
+{
+	public override List<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+		JsonSerializer.Deserialize<List<string>>(ref reader)?.Select(t => t.Replace("TAG-", "")).ToList() ?? [];
+
+	public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options) =>
+		JsonSerializer.Serialize(writer, value.Select(t => $"TAG-{t}").ToList());
+}
+
+/// <summary>Document whose tags are serialized through a converter of their own.</summary>
+public class ConvertedTagsProduct
+{
+	[JsonConverter(typeof(PrefixedTagsConverter))]
+	public List<string> Tags { get; set; } = [];
 }
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>

@@ -123,6 +123,8 @@ query.Where(l => levels.Contains(l.Level))
 // WHERE log.level IN ("ERROR", "FATAL", "CRITICAL")
 ```
 
+A `Contains` that takes an equality comparer is refused: the comparison is the one Elasticsearch performs, which the comparer would not follow.
+
 ### Boolean fields
 
 ```csharp
@@ -157,11 +159,12 @@ Four more shapes are refused: two fields compared with each other, which leaves 
 A field that holds more than one value is tested as a whole, with the function that answers the test over every value at once.
 
 ```csharp
-.Where(p => p.Tags.Any(t => t == "water"))      // WHERE MATCH(tags, "water")
-.Where(p => p.Tags.Contains("water"))           // WHERE MATCH(tags, "water")
-.Where(p => p.Tags.Any())                       // WHERE COALESCE(MV_COUNT(tags), 0) > 0
-.Where(p => p.Ratings.Any(r => r > 3))          // WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
-.Where(p => p.Ratings.All(r => r > 3))          // WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
+.Where(p => p.Tags.Any(t => t == "water"))        // WHERE MATCH(tags, "water")
+.Where(p => p.Tags.Contains("water"))             // WHERE MATCH(tags, "water")
+.Where(p => p.Tags.Any())                         // WHERE COALESCE(MV_COUNT(tags), 0) > 0
+.Where(p => p.Ratings.Any(r => r > 3))            // WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
+.Where(p => p.Ratings.All(r => r > 3))            // WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
+.Where(p => p.Tags.Any(t => wanted.Contains(t)))  // WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
 ```
 
 `All` over equality asks for one distinct value that matches, since every value being equal to the same one means there is only one: `MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(...)`. A missing field is an empty sequence, where `All` holds and `Any` does not, and each translation says so explicitly rather than leaving the predicate null.
@@ -171,6 +174,8 @@ Any property typed as an `IEnumerable<T>` is accepted, a set and an interface in
 On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
 
 A test that holds for one value at a time, such as `StartsWith`, is refused: it needs the field read position by position, which the functions above do not do.
+
+Four more shapes are refused: a `Contains` that takes an equality comparer, which the comparison Elasticsearch performs would not follow; membership in a captured set, dictionary or collection type of your own, which may compare its values in a way of its own, where an array, a `List` or a LINQ query compares with default equality; membership in more than 256 values, each of which adds a level to the expression Elasticsearch parses; and a property with a `JsonConverter`, whose field holds what the converter writes rather than the values compared.
 
 ### Captured variables and parameterization
 
