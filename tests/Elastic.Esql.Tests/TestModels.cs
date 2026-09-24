@@ -149,10 +149,10 @@ public class InterfaceTaggedProduct
 public class PrefixedTagsConverter : JsonConverter<List<string>>
 {
 	public override List<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-		JsonSerializer.Deserialize<List<string>>(ref reader)?.Select(t => t.Replace("TAG-", "")).ToList() ?? [];
+		JsonSerializer.Deserialize<List<string>>(ref reader, options)?.Select(t => t.Replace("TAG-", "")).ToList() ?? [];
 
 	public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options) =>
-		JsonSerializer.Serialize(writer, value.Select(t => $"TAG-{t}").ToList());
+		JsonSerializer.Serialize(writer, value.Select(t => $"TAG-{t}").ToList(), options);
 }
 
 /// <summary>Document whose tags are serialized through a converter of their own.</summary>
@@ -162,6 +162,7 @@ public class ConvertedTagsProduct
 	public List<string> Tags { get; set; } = [];
 }
 
+/// <summary>An element of a collection of objects.</summary>
 public class ProductLine
 {
 	public string Sku { get; set; } = string.Empty;

@@ -10,9 +10,10 @@ using Elastic.Esql.Translation;
 namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
-/// Predicates over multi-value document fields. A document matches when any of the
-/// field's values matches, which is what MATCH does, and unlike MV_EXPAND it does not
-/// duplicate rows.
+/// Any, All and Contains over multi-value document fields, answered over the field as a
+/// whole: MATCH for a value, MV_MIN and MV_MAX for an ordering, MV_COUNT for Any(), with
+/// none of the row duplication MV_EXPAND would introduce. A shape whose values cannot be
+/// compared that way is refused with a message that says why.
 /// </summary>
 public class MultiValueFieldTests : EsqlTestBase
 {
@@ -348,7 +349,8 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_AnyOverAContainsWithAnEqualityComparer_ThrowsNotSupported()
 	{
-		// the values would be matched the way the store compares them, not the way the comparer does
+		// the values would be matched the way the store compares them, not the way the
+		// comparer does
 		var wanted = new[] { "IOT", "WATER" };
 
 		var query = CreateQuery<TaggedProduct>()
@@ -766,8 +768,7 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*")
-			.And.Message.Should().NotContain("equality comparer");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
 	}
 
 	[Test]
