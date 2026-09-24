@@ -4,6 +4,7 @@
 
 using System.Collections.ObjectModel;
 using System.Linq.Expressions;
+using System.Text.Json;
 
 using Elastic.Esql.Translation;
 
@@ -865,6 +866,57 @@ public class MultiValueFieldTests : EsqlTestBase
 			.ToString();
 
 		_ = esql.Should().Contain(@"MATCH(tags, ""a\nb\t\""c"")");
+	}
+
+	[Test]
+	public void Where_AnyOverACollectionWithARegisteredConverter_ThrowsNotSupported()
+	{
+		// a converter among the serializer's converters writes every List<string> field, and
+		// the value compared would not go through it
+		var provider = new EsqlQueryProvider(new JsonSerializerOptions
+		{
+			TypeInfoResolver = EsqlTestMappingContext.Default,
+			PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+			Converters = { new PrefixedTagsConverter() }
+		});
+
+		var query = new EsqlQueryable<TaggedProduct>(provider)
+			.From("products")
+			.Where(p => p.Categories.Any(c => c == "pumps"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
+	}
+
+	[Test]
+	public void Where_ContainsOverACollectionTypeWithAConverter_ThrowsNotSupported()
+	{
+		// the converter named on the collection type writes the field as well
+		var query = CreateQuery<TypeConvertedTagsProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
+	}
+
+	[Test]
+	public void Where_NegatedContains_TranslatesToNotMatch()
+	{
+		// MATCH is false, not null, on a document without the field, so the negation keeps
+		// it, as !Contains does over an empty sequence
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT MATCH(tags, "iot")
+            """.NativeLineEndings());
 	}
 
 	/// <summary>

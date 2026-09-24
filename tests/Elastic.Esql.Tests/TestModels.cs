@@ -25,6 +25,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(NestedSelectionHostWithTag))]
 [JsonSerializable(typeof(PrefixedCodeDocument))]
 [JsonSerializable(typeof(ConvertedTagsProduct))]
+[JsonSerializable(typeof(TypeConvertedTagsProduct))]
 [JsonSerializable(typeof(LinedProduct))]
 [JsonSerializable(typeof(AttributedProduct))]
 [JsonSerializable(typeof(NullableNestedModel))]
@@ -148,11 +149,59 @@ public class InterfaceTaggedProduct
 /// <summary>Writes each tag in its prefixed form, so the field holds values the query was not given.</summary>
 public class PrefixedTagsConverter : JsonConverter<List<string>>
 {
-	public override List<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-		JsonSerializer.Deserialize<List<string>>(ref reader, options)?.Select(t => t.Replace("TAG-", "")).ToList() ?? [];
+	public override List<string> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+	{
+		var tags = new List<string>();
 
-	public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options) =>
-		JsonSerializer.Serialize(writer, value.Select(t => $"TAG-{t}").ToList(), options);
+		while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+			tags.Add((reader.GetString() ?? string.Empty).Replace("TAG-", ""));
+
+		return tags;
+	}
+
+	public override void Write(Utf8JsonWriter writer, List<string> value, JsonSerializerOptions options)
+	{
+		writer.WriteStartArray();
+
+		foreach (var tag in value)
+			writer.WriteStringValue($"TAG-{tag}");
+
+		writer.WriteEndArray();
+	}
+}
+
+/// <summary>A collection type that names its own converter, which then writes every field of the type.</summary>
+[JsonConverter(typeof(PrefixedTagListConverter))]
+public class PrefixedTagList : List<string>;
+
+/// <summary>The same prefixing, for the collection type that carries it.</summary>
+public class PrefixedTagListConverter : JsonConverter<PrefixedTagList>
+{
+	public override PrefixedTagList Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+	{
+		var tags = new PrefixedTagList();
+
+		while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+			tags.Add((reader.GetString() ?? string.Empty).Replace("TAG-", ""));
+
+		return tags;
+	}
+
+	public override void Write(Utf8JsonWriter writer, PrefixedTagList value, JsonSerializerOptions options)
+	{
+		writer.WriteStartArray();
+
+		foreach (var tag in value)
+			writer.WriteStringValue($"TAG-{tag}");
+
+		writer.WriteEndArray();
+	}
+}
+
+/// <summary>Document whose tags are a collection type with a converter of its own.</summary>
+public class TypeConvertedTagsProduct
+{
+	public PrefixedTagList Tags { get; set; } = [];
 }
 
 /// <summary>Document whose tags are serialized through a converter of their own.</summary>
