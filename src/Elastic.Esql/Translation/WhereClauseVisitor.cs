@@ -9,6 +9,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Formatting;
 using Elastic.Esql.Functions;
@@ -671,7 +672,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// the comparer would not follow.
 	/// </summary>
 	private static bool TakesAnEqualityComparer(MethodCallExpression node) =>
-		node.Method.GetParameters() is [.., { ParameterType: { IsGenericType: true } last }]
+		node.Method.Name == "Contains"
+		&& node.Method.GetParameters() is [.., { ParameterType: { IsGenericType: true } last }]
 		&& last.GetGenericTypeDefinition() == typeof(IEqualityComparer<>);
 
 	private static NotSupportedException ContainsWithAnEqualityComparer() => new(
@@ -1395,6 +1397,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (!IsFrameworkMethod(node.Method))
 			return false;
 
+		// A collection of objects is an object in the mapping: ES|QL has a column for each
+		// of its fields and none for the objects themselves, so there is nothing to count
+		// or to compare a value with.
+		if (ExpressionTranslationHelpers.IsObjectSelectionType(ElementType(source.Type)))
+		{
+			throw new NotSupportedException(
+				$"{methodName} over a collection of objects is not supported: ES|QL has a column for "
+				+ "each field of the objects and none for the objects themselves.");
+		}
+
 		// The field holds what the converter writes, and the values compared are emitted as
 		// given: a converter of the collection does not apply to one of its values, so the
 		// two need not meet, and the count of values need not be the one written either.
@@ -1462,15 +1474,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				TryParseElementPredicate(disjunction.Right, element, negated: negated),
 
 			BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison =>
-				TryParseElementEquality(comparison, element, negated),
+				TryParseElementEquality(comparison, element, negated: negated),
 
 			BinaryExpression
 			{
 				NodeType: ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
 					or ExpressionType.LessThan or ExpressionType.LessThanOrEqual
-			} ordering => TryParseElementOrdering(ordering, element, negated),
+			} ordering => TryParseElementOrdering(ordering, element, negated: negated),
 
-			MethodCallExpression call => TryParseElementCall(call, element, negated),
+			MethodCallExpression call => TryParseElementCall(call, element, negated: negated),
 
 			_ => null
 		};
@@ -1486,7 +1498,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return null;
 
 		var isEqual = comparison.NodeType == ExpressionType.Equal;
-		return new ElementPredicate(ElementPredicateKind.Equal, [constant], isEqual ? negated : !negated, [CapturedName(value)]);
+		return new ElementPredicate(ElementPredicateKind.Equal, [constant], Negated: isEqual ? negated : !negated, [CapturedName(value)]);
 	}
 
 	/// <summary><c>x &gt; v</c> and the other orderings, with the element on either side.</summary>
@@ -1507,7 +1519,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => ElementPredicateKind.LessThanOrEqual
 		};
 
-		return new ElementPredicate(kind, [constant], negated, [CapturedName(value)]);
+		return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(value)]);
 	}
 
 	/// <summary>
@@ -1527,7 +1539,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				|| !TryGetConstant(call.Arguments[0], out var constant))
 				return null;
 
-			return new ElementPredicate(kind, [constant], negated, [CapturedName(call.Arguments[0])]);
+			return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(call.Arguments[0])]);
 		}
 
 		// values.Contains(x), over a constant collection
@@ -1554,7 +1566,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (candidates.Any(candidate => candidate is null))
 			return null;
 
-		return new ElementPredicate(ElementPredicateKind.In, candidates, negated);
+		return new ElementPredicate(ElementPredicateKind.In, candidates, Negated: negated);
 	}
 
 	/// <summary>
@@ -1584,7 +1596,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			case ElementPredicateKind.In when !all:
 				if (predicate.Values.Count == 0)
 				{
-					_ = _builder.Append("FALSE");
+					_ = _builder.Append("false");
 					return true;
 				}
 
@@ -1700,8 +1712,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			? ResolveFieldPath(member)
 			: expression.ResolveFieldName(_context.Metadata);
 
+	/// <summary>
+	/// A field that holds more than one value: a collection of the document, which is
+	/// what <see cref="TypeHelper.IsEnumerableType"/> counts as one. A dictionary is an
+	/// object in the mapping rather than a list of values, and is not.
+	/// </summary>
 	private static bool IsMultiValueField(Expression expression) =>
-		IsEnumerableType(expression.Type) && ContainsParameter(expression);
+		TypeHelper.IsEnumerableType(expression.Type) && ContainsParameter(expression);
+
+	private static Type ElementType(Type collectionType) =>
+		TypeHelper.FindGenericType(typeof(IEnumerable<>), collectionType)!.GetGenericArguments()[0];
 
 	private static string TypeName(Type type) =>
 		type.Name.IndexOf('`') is var arity and >= 0 ? type.Name.Substring(0, arity) : type.Name;

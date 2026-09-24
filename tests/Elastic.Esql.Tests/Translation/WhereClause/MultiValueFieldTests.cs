@@ -2,6 +2,7 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Collections.ObjectModel;
 using System.Linq.Expressions;
 
 using Elastic.Esql.Translation;
@@ -63,8 +64,8 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_AnyWithoutPredicate_TranslatesToMvCount()
 	{
-		// the count is coalesced: a missing field is an empty sequence, where Any() is
-		// false, and so is its negation's opposite
+		// the count is coalesced: a missing field is an empty sequence, where Any() is false
+		// and its negation true
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Any())
@@ -347,7 +348,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_AnyOverAContainsWithAnEqualityComparer_ThrowsNotSupported()
 	{
-		// the comparer was dropped and the values matched case-sensitively
+		// the values would be matched the way the store compares them, not the way the comparer does
 		var wanted = new[] { "IOT", "WATER" };
 
 		var query = CreateQuery<TaggedProduct>()
@@ -520,7 +521,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE FALSE
+            | WHERE false
             """.NativeLineEndings());
 	}
 
@@ -644,6 +645,227 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
 	}
 
+	[Test]
+	public void Where_AnyWithInequality_BecomesNotAllEqual()
+	{
+		// Any(t != v) is "not every value is v"
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t != "iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT (tags IS NULL OR (MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(tags, "iot")))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedList_MatchesEachValue()
+	{
+		var wanted = new List<string> { "iot", "water" };
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (MATCH(tags, "iot") OR MATCH(tags, "water"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedLinqQuery_MatchesEachValue()
+	{
+		// a LINQ operator compares with default equality, and is enumerated once
+		var tags = new[] { "io", "water" };
+		var wanted = tags.Where(tag => tag.Length > 2);
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MATCH(tags, "water")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedSortedSet_ThrowsNotSupported()
+	{
+		// a sorted set carries a comparer of its own, and is refused before anything reads it
+		var wanted = new SortedSet<string> { "iot" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*SortedSet*way of its own*");
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedReadOnlyCollection_ThrowsNotSupported()
+	{
+		// a wrapper hands Contains to the list it wraps, which may compare in any way
+		var wanted = new ReadOnlyCollection<string>(["iot"]);
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*ReadOnlyCollection*way of its own*");
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedArrayHoldingNull_ThrowsNotSupported()
+	{
+		// a stored value is never null, and MATCH(tags, null) is not valid ES|QL
+		var wanted = new[] { "iot", null };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
+	}
+
+	[Test]
+	public void Where_AllOverACapturedArray_ThrowsNotSupported()
+	{
+		// "every value is one of these" holds for one value at a time
+		var wanted = new[] { "iot", "water" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values*");
+	}
+
+	[Test]
+	public void Where_AMethodTakingAComparerInsideAny_IsNotTakenForContains()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => OwnPredicates.SameTag(t, StringComparer.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*")
+			.And.Message.Should().NotContain("equality comparer");
+	}
+
+	[Test]
+	public void Where_AnAnyOfYourOwn_IsNotTranslated()
+	{
+		// a method named Any outside the framework may mean anything
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => OwnPredicates.Any(p.Tags, t => t == "iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*OwnPredicates.Any*");
+	}
+
+	[Test]
+	public void Where_AnyOverACollectionOfObjects_ThrowsNotSupported()
+	{
+		// ES|QL has the column lines.sku and none for lines itself
+		var query = CreateQuery<LinedProduct>()
+			.From("orders")
+			.Where(o => o.Lines.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*collection of objects*");
+	}
+
+	[Test]
+	public void Where_ContainsOverACollectionOfObjects_ThrowsNotSupported()
+	{
+		var line = new ProductLine { Sku = "a" };
+
+		var query = CreateQuery<LinedProduct>()
+			.From("orders")
+			.Where(o => o.Lines.Contains(line));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*collection of objects*");
+	}
+
+	[Test]
+	public void Where_AnyOverADictionary_IsNotTranslated()
+	{
+		// a dictionary is one object in the mapping, not a field holding values
+		var query = CreateQuery<AttributedProduct>()
+			.From("products")
+			.Where(p => p.Attributes.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
+	}
+
+	[Test]
+	public void Where_AnyWithANullGuardAfterThePredicate_DropsTheGuard()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot" && t != null))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MATCH(tags, "iot")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllWithANullGuardThatAdmitsNull_DropsTheGuard()
+	{
+		// "x == null || P(x)" is P(x) over values that are never null
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => t == null || t == "iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NULL OR (MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(tags, "iot")))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AControlCharacterInTheValue_IsEscaped()
+	{
+		// the value is written the way a single field's is, escapes included
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "a\nb\t\"c"))
+			.ToString();
+
+		_ = esql.Should().Contain(@"MATCH(tags, ""a\nb\t\""c"")");
+	}
+
 	/// <summary>
 	/// Translates the predicate of a Where over an in-memory source, the way the query
 	/// syntax leaves it behind transparent identifiers.
@@ -660,5 +882,12 @@ public class MultiValueFieldTests : EsqlTestBase
 		};
 
 		return new WhereClauseVisitor(context).Translate(predicate.Body);
+	}
+
+	private static class OwnPredicates
+	{
+		public static bool Any<T>(IEnumerable<T> source, Func<T, bool> predicate) => source.Any(predicate);
+
+		public static bool SameTag(string value, IEqualityComparer<string> comparer) => comparer.Equals(value, "iot");
 	}
 }

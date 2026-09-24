@@ -169,13 +169,13 @@ A field that holds more than one value is tested as a whole, with the function t
 
 `All` over equality asks for one distinct value that matches, since every value being equal to the same one means there is only one: `MV_COUNT(MV_DEDUPE(tags)) == 1 AND MATCH(...)`. A missing field is an empty sequence, where `All` holds and `Any` does not, and each translation says so explicitly rather than leaving the predicate null.
 
-Any property typed as an `IEnumerable<T>` is accepted, a set and an interface included. No collection instance exists when the query is translated, so a comparer on one is as invisible as a `StringComparison` on a scalar: the comparison is the one the store performs, not the one the collection would.
+Any property typed as an `IEnumerable<T>` is accepted, a set and an interface included; a dictionary is one object in the mapping rather than a field of values, and is not. No collection instance exists when the query is translated, so a comparer on one is as invisible as a `StringComparison` on a scalar: the comparison is the one the store performs, not the one the collection would.
 
 On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
 
 A test that holds for one value at a time, such as `StartsWith`, is refused: it needs the field read position by position, which the functions above do not do.
 
-Four more shapes are refused: a `Contains` that takes an equality comparer, which the comparison Elasticsearch performs would not follow; membership in a captured set, dictionary or collection type of your own, which may compare its values in a way of its own, where an array, a `List` or a LINQ query compares with default equality; membership in more than 256 values, each of which adds a level to the expression Elasticsearch parses; and a property with a `JsonConverter`, whose field holds what the converter writes rather than the values compared.
+Five more shapes are refused: a `Contains` that takes an equality comparer, which the comparison Elasticsearch performs would not follow; membership in a captured set, dictionary or collection type of your own, which may compare its values in a way of its own, where an array, a `List` or a LINQ query compares with default equality; membership in more than 256 values, each of which adds a level to the expression Elasticsearch parses; a property with a `JsonConverter`, whose field holds what the converter writes rather than the values compared; and a collection of objects, for which ES|QL has a column for each field of the objects and none for the objects themselves.
 
 ### Captured variables and parameterization
 

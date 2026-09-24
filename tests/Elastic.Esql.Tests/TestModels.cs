@@ -25,6 +25,8 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(NestedSelectionHostWithTag))]
 [JsonSerializable(typeof(PrefixedCodeDocument))]
 [JsonSerializable(typeof(ConvertedTagsProduct))]
+[JsonSerializable(typeof(LinedProduct))]
+[JsonSerializable(typeof(AttributedProduct))]
 [JsonSerializable(typeof(NullableNestedModel))]
 [JsonSerializable(typeof(AddressModel))]
 [JsonSerializable(typeof(SimpleDocument))]
@@ -158,6 +160,23 @@ public class ConvertedTagsProduct
 {
 	[JsonConverter(typeof(PrefixedTagsConverter))]
 	public List<string> Tags { get; set; } = [];
+}
+
+public class ProductLine
+{
+	public string Sku { get; set; } = string.Empty;
+}
+
+/// <summary>Document holding a collection of objects, which the mapping stores as an object.</summary>
+public class LinedProduct
+{
+	public List<ProductLine> Lines { get; set; } = [];
+}
+
+/// <summary>Document holding a dictionary, which the mapping stores as one object.</summary>
+public class AttributedProduct
+{
+	public Dictionary<string, int> Attributes { get; set; } = [];
 }
 
 /// <summary>Test document with dense_vector fields for KNN / V_* tests.</summary>
