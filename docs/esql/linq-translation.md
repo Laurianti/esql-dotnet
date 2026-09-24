@@ -353,7 +353,7 @@ query.Select(l => new LogDto
 
 The guard has to read through the path it tests: `l.Host == null ? null : new HostDto { Name = l.Agent.Name }` is refused, since dropping it would give a value to a row that has no host.
 
-Two consequences are worth stating. A parent that exists but whose projected leaves are all null comes back as null, the same as a missing parent, because the row carries nothing to tell the two apart. And the member has to be able to hold that null, so it must be declared nullable: the "without an initializer" half of that condition cannot be checked at translation time, so `HostDto? Host { get; set; } = new()` yields an empty object rather than null.
+Two consequences are worth stating. A parent that exists but whose projected leaves are all null comes back as null, the same as a missing parent, because the row carries nothing to tell the two apart. And the member has to be able to hold that null, so it cannot be declared non-nullable, while a member without an annotation, as a consumer building without nullable reference types has everywhere, passes; the "without an initializer" half of that condition cannot be checked at translation time, so `HostDto? Host { get; set; } = new()` yields an empty object rather than null.
 
 ## KEEP and DROP extensions
 
