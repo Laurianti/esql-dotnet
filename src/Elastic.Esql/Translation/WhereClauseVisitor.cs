@@ -1751,7 +1751,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// object in the mapping rather than a list of values, and is not.
 	/// </summary>
 	private static bool IsMultiValueField(Expression expression) =>
-		TypeHelper.IsEnumerableType(expression.Type) && ContainsParameter(expression);
+		ContainsParameter(expression) && TypeHelper.IsEnumerableType(expression.Type);
 
 	private static Type ElementType(Type collectionType) =>
 		TypeHelper.FindGenericType(typeof(IEnumerable<>), collectionType)!.GetGenericArguments()[0];
