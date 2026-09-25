@@ -1184,7 +1184,7 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>();
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
 	}
 
 	[Test]
