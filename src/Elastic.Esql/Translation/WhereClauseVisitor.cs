@@ -1451,7 +1451,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private static Expression? TryGetMultiValueSource(MethodCallExpression node)
 	{
-		if (node.Method.Name is not ("Any" or "All" or "Contains"))
+		if (node.Method.Name is not ("All" or "Any" or "Contains"))
 			return null;
 
 		// the source must be a document field, not a constant collection
@@ -2037,16 +2037,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		var definition = type.GetGenericTypeDefinition();
 
-		return definition == typeof(List<>)
-			|| definition == typeof(Queue<>)
-			|| definition == typeof(Stack<>)
-			|| definition == typeof(LinkedList<>)
-			|| definition == typeof(ArraySegment<>)
+		return definition == typeof(ArraySegment<>)
 			|| definition == typeof(ConcurrentBag<>)
 			|| definition == typeof(ConcurrentQueue<>)
 			|| definition == typeof(ConcurrentStack<>)
-			|| definition == typeof(ReadOnlyCollection<>)
 			|| definition.FullName is "System.Collections.Immutable.ImmutableArray`1"
-				or "System.Collections.Immutable.ImmutableList`1";
+				or "System.Collections.Immutable.ImmutableList`1"
+			|| definition == typeof(LinkedList<>)
+			|| definition == typeof(List<>)
+			|| definition == typeof(Queue<>)
+			|| definition == typeof(ReadOnlyCollection<>)
+			|| definition == typeof(Stack<>);
 	}
 }
