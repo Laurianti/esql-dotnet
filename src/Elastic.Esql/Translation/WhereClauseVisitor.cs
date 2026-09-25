@@ -1690,6 +1690,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 					return true;
 				}
 
+			// "every value is one of these", which "some value is not" negates, has no answer
+			// over the field as a whole: MATCH answers whether some value is
+			case ElementPredicateKind.In:
+				throw new NotSupportedException(
+					$"A membership test that every value of {name} must pass, or that some value must fail, is not "
+					+ "supported: MATCH answers whether some value is one of the given values, not whether every "
+					+ "value is. Test with Any, and negate the Any itself to ask that no value is one of them.");
+
 			// StartsWith and the rest test one value at a time, which needs the field read
 			// position by position: the shape is refused rather than answered by a test that
 			// reads the whole field.

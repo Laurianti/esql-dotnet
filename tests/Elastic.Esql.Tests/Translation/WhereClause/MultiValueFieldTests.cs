@@ -810,7 +810,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_AllOverACapturedArray_ThrowsNotSupported()
 	{
-		// "every value is one of these" holds for one value at a time
+		// MATCH answers whether some value is one of these, not whether every value is
 		var wanted = new[] { "iot", "water" };
 
 		var query = CreateQuery<TaggedProduct>()
@@ -819,7 +819,22 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*membership*every value of tags must pass*");
+	}
+
+	[Test]
+	public void Where_AnyWithNegatedMembership_ThrowsNotSupported()
+	{
+		// "some value is not one of these" is "not every value is one of these"
+		var wanted = new[] { "iot", "water" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => !wanted.Contains(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*membership*some value must fail*");
 	}
 
 	[Test]
