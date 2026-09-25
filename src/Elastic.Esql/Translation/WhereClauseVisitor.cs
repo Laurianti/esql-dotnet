@@ -1721,10 +1721,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		// values.Contains(x), over a constant collection: another method taking one value and
-		// returning a bool, such as Remove, is no membership test
+		// returning a bool, such as Remove, is no membership test. The element may sit inside a
+		// conversion, as for equality: over a short, wanted.Contains(s) is wanted.Contains((int)s)
 		if (call.Method.Name != "Contains"
 			|| !TryGetContainsArguments(call, out var valueExpression, out var collection)
-			|| valueExpression != element
+			|| valueExpression.UnwrapConvertExpressions() != element
 			|| collection is null)
 			return null;
 
@@ -1746,7 +1747,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (candidates.Any(candidate => candidate is null))
 			throw ComparisonWithNull(field);
 
-		return new ElementPredicate(ElementPredicateKind.In, [.. candidates.Select(Expression.Constant)], Negated: negated);
+		// numbers compared with an enum are turned back into it, as for equality, so that an
+		// enum written by name is compared by name
+		var enumType = Nullable.GetUnderlyingType(element.Type) ?? element.Type;
+		var values = candidates.Cast<object>();
+		if (enumType.IsEnum)
+			values = values.Select(value => value.GetType() == enumType ? value : Enum.ToObject(enumType, value));
+
+		return new ElementPredicate(ElementPredicateKind.In, [.. values.Select(Expression.Constant)], Negated: negated);
 	}
 
 	/// <summary>

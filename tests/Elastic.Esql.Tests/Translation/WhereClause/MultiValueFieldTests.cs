@@ -909,6 +909,42 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyOverAMembershipOfANarrowInteger_MatchesEachValue()
+	{
+		// a short is looked up as an int: "wanted.Contains(s)" is "wanted.Contains((int)s)"
+		var wanted = new List<int> { 1, 2 };
+
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Sizes.Any(s => wanted.Contains(s)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (sizes IS NOT NULL AND (MATCH(sizes, 1) OR MATCH(sizes, 2)))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyOverAMembershipOfAnEnumAsANumber_MatchesTheName()
+	{
+		// the numbers are turned back into the enum, which its converter writes by name
+		var codes = new[] { 1 };
+
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Any(g => codes.Contains((int)g)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (grades IS NOT NULL AND MATCH(grades, "High"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_AnyOverACapturedLinqQuery_MatchesEachValue()
 	{
 		// a LINQ operator compares with default equality, and is enumerated once
