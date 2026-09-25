@@ -403,6 +403,22 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyAndAllOverAnImmutableArray_TranslateToMatch()
+	{
+		// Any and All bind to ImmutableArrayExtensions rather than Enumerable
+		var esql = CreateQuery<ImmutableTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot") && p.Tags.All(t => t != "water"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE ((tags IS NOT NULL AND MATCH(tags, "iot")) AND NOT (tags IS NOT NULL AND MATCH(tags, "water")))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_ContainsOverACollection_TranslatesToMatch()
 	{
 		var esql = CreateQuery<CollectionTaggedProduct>()

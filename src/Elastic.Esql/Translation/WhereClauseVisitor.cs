@@ -1862,10 +1862,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// Whether the method is the framework's own: Enumerable and MemoryExtensions for the
-	/// static forms, the collections of the base library for the instance ones. These are
-	/// recognised by namespace: their assemblies differ between frameworks, HashSet being in
-	/// System.Core and LinkedList, Queue and Stack in System on .NET Framework.
+	/// Whether the method is the framework's own: Enumerable, MemoryExtensions and, for an
+	/// ImmutableArray, ImmutableArrayExtensions for the static forms, and the collections of
+	/// the base library for the instance ones. These are recognised by namespace: their
+	/// assemblies differ between frameworks, HashSet being in System.Core and LinkedList,
+	/// Queue and Stack in System on .NET Framework.
 	/// </summary>
 	private static bool IsFrameworkMethod(MethodInfo method)
 	{
@@ -1875,7 +1876,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 
 		if (method.IsStatic)
-			return declaring == typeof(Enumerable) || declaring == typeof(MemoryExtensions);
+		{
+			return declaring == typeof(Enumerable)
+				|| declaring == typeof(MemoryExtensions)
+				// by name: the netstandard2.0 build does not reference System.Collections.Immutable
+				|| declaring.FullName == "System.Linq.ImmutableArrayExtensions";
+		}
 
 		return declaring.Namespace is "System.Collections.Concurrent"
 			or "System.Collections.Frozen"
