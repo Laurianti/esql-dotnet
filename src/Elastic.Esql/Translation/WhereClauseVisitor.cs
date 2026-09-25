@@ -1461,7 +1461,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Reads the body of the lambda passed to Any/All as one predicate on the element.
 	/// Null guards on the element are dropped, since a stored value is never null.
 	/// </summary>
-	private static ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated) =>
+	private ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated) =>
 		body switch
 		{
 			UnaryExpression { NodeType: ExpressionType.Not } negation =>
@@ -1492,28 +1492,37 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => null
 		};
 
-	/// <summary><c>x == v</c> or <c>x != v</c>, with the element on either side.</summary>
-	private static ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, bool negated)
+	/// <summary>
+	/// <c>x == v</c> or <c>x != v</c>, with the element on either side. C# compares an enum, a
+	/// short or a byte as an int, and an int with a double as a double, so the element may sit
+	/// inside a conversion.
+	/// </summary>
+	private ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, bool negated)
 	{
-		var value = comparison.Left == element ? comparison.Right
-			: comparison.Right == element ? comparison.Left
+		var value = comparison.Left.UnwrapConvertExpressions() == element ? comparison.Right
+			: comparison.Right.UnwrapConvertExpressions() == element ? comparison.Left
 			: null;
 
-		if (value is null || !TryGetConstant(value, out var constant))
+		var compared = value is null ? null : TryGetComparedValue(value, element);
+		if (compared is null)
 			return null;
 
 		var isEqual = comparison.NodeType == ExpressionType.Equal;
-		return new ElementPredicate(ElementPredicateKind.Equal, [constant], Negated: isEqual ? negated : !negated, [CapturedName(value)]);
+		return new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: isEqual ? negated : !negated);
 	}
 
-	/// <summary><c>x &gt; v</c> and the other orderings, with the element on either side.</summary>
-	private static ElementPredicate? TryParseElementOrdering(BinaryExpression ordering, ParameterExpression element, bool negated)
+	/// <summary>
+	/// <c>x &gt; v</c> and the other orderings, with the element on either side, inside a
+	/// conversion as for equality.
+	/// </summary>
+	private ElementPredicate? TryParseElementOrdering(BinaryExpression ordering, ParameterExpression element, bool negated)
 	{
 		// "10 < x" is "x > 10": keep the element on the left
-		var elementOnLeft = ordering.Left == element;
-		var value = elementOnLeft ? ordering.Right : ordering.Right == element ? ordering.Left : null;
+		var elementOnLeft = ordering.Left.UnwrapConvertExpressions() == element;
+		var value = elementOnLeft ? ordering.Right : ordering.Right.UnwrapConvertExpressions() == element ? ordering.Left : null;
 
-		if (value is null || !TryGetConstant(value, out var constant))
+		var compared = value is null ? null : TryGetComparedValue(value, element);
+		if (compared is null)
 			return null;
 
 		var kind = (ordering.NodeType, elementOnLeft) switch
@@ -1524,7 +1533,33 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ => ElementPredicateKind.LessThanOrEqual
 		};
 
-		return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(value)]);
+		return new ElementPredicate(kind, [compared], Negated: negated);
+	}
+
+	/// <summary>
+	/// The value an element is compared with, as the expression to render, which is rendered
+	/// as a scalar comparison renders it, a date computed from DateTime.UtcNow included. A
+	/// value that reads a field, of the element or of the document, is none, and neither is
+	/// null, which a stored value never is.
+	/// </summary>
+	private Expression? TryGetComparedValue(Expression value, ParameterExpression element)
+	{
+		if (ReadsAField(value) || ResolvesToNull(value))
+			return null;
+
+		var enumType = Nullable.GetUnderlyingType(element.Type) ?? element.Type;
+		if (!enumType.IsEnum)
+			return value;
+
+		// "x == Priority.High" reaches the tree as "(int)x == 2": the number is turned back into
+		// the enum, as a scalar comparison does, so that an enum written by name is compared by name
+		var unwrapped = value.UnwrapConvertExpressions();
+		if ((Nullable.GetUnderlyingType(unwrapped.Type) ?? unwrapped.Type) == enumType)
+			return unwrapped;
+
+		return TryGetConstant(unwrapped, out var number) && number is not null
+			? Expression.Constant(Enum.ToObject(enumType, number), enumType)
+			: null;
 	}
 
 	/// <summary>
@@ -1541,10 +1576,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				|| (call.Arguments.Count == 2 && call.Arguments[1].Type == typeof(StringComparison))))
 		{
 			if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
-				|| !TryGetConstant(call.Arguments[0], out var constant))
+				|| !TryGetConstant(call.Arguments[0], out _))
 				return null;
 
-			return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(call.Arguments[0])]);
+			return new ElementPredicate(kind, [call.Arguments[0]], Negated: negated);
 		}
 
 		// values.Contains(x), over a constant collection: another method taking one value and
@@ -1573,7 +1608,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (candidates.Any(candidate => candidate is null))
 			return null;
 
-		return new ElementPredicate(ElementPredicateKind.In, candidates, Negated: negated);
+		return new ElementPredicate(ElementPredicateKind.In, [.. candidates.Select(Expression.Constant)], Negated: negated);
 	}
 
 	/// <summary>
@@ -1738,9 +1773,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	private readonly record struct ElementPredicate(
 		ElementPredicateKind Kind,
-		IReadOnlyList<object?> Values,
-		bool Negated,
-		IReadOnlyList<string?>? Names = null);
+		IReadOnlyList<Expression> Values,
+		bool Negated);
 
 	// MATCH is an analyzed search on a text-mapped field, so it matches more than equality
 	// does. MV_CONTAINS (preview since 9.2) and MV_INTERSECTS (preview since 9.4) are the
@@ -1818,17 +1852,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
 
 	/// <summary>
-	/// A value of an element predicate, as a query parameter when it came from a
-	/// captured variable and <c>InlineParameters</c> is off, and as a literal otherwise.
+	/// A value of an element predicate, rendered as a scalar comparison renders it: a
+	/// captured variable as a query parameter when <c>InlineParameters</c> is off, a literal
+	/// inline, and a value such as <c>DateTime.UtcNow.AddDays(-7)</c> as its translation.
 	/// </summary>
-	private string RenderValue(ElementPredicate predicate, int index)
-	{
-		var name = predicate.Names is { } names && index < names.Count ? names[index] : null;
-
-		return name is null
-			? _context.FormatValue(predicate.Values[index], null)
-			: _context.GetValueOrParameterName(name, predicate.Values[index]);
-	}
+	private string RenderValue(ElementPredicate predicate, int index) =>
+		TranslateSubExpression(predicate.Values[index]);
 
 	/// <summary>
 	/// How many values of a collection an Any over it may test, each with its own MATCH.

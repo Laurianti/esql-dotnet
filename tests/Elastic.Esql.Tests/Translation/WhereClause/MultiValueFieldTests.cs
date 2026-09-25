@@ -1026,6 +1026,86 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>();
 	}
 
+	[Test]
+	public void Where_AnyWithEqualityOnAnEnumList_TranslatesToMatch()
+	{
+		// C# compares an enum as its number: "x == Priority.High" is "(int)x == 2"
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Priorities.Any(x => x == Priority.High))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (priorities IS NOT NULL AND MATCH(priorities, 2))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithEqualityOnAnEnumWrittenByName_MatchesTheName()
+	{
+		// the number the compiler leaves in the tree is turned back into the enum, which its
+		// converter writes by name, as the field holds it
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Any(g => g == Grade.High))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (grades IS NOT NULL AND MATCH(grades, "High"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithAnOrderingOnNarrowIntegers_TranslatesToMvMax()
+	{
+		// a short and a byte are compared as int: "s > 3" is "(int)s > 3"
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Sizes.Any(s => s > 3) && p.Scores.Any(s => s > 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE ((sizes IS NOT NULL AND MV_MAX(sizes) > 3) AND (scores IS NOT NULL AND MV_MAX(scores) > 3))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithAFractionalBoundOnAnIntegerList_TranslatesToMvMax()
+	{
+		// "r > 3.5" is "(double)r > 3.5"
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.Any(r => r > 3.5))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3.5)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithARelativeDate_TranslatesItAsAScalarComparisonDoes()
+	{
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Restocks.Any(d => d > DateTime.UtcNow.AddDays(-7)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (restocks IS NOT NULL AND MV_MAX(restocks) > (NOW() - 7 days))
+            """.NativeLineEndings());
+	}
+
 	/// <summary>
 	/// Translates the predicate of a Where over an in-memory source, the way the query
 	/// syntax leaves it behind transparent identifiers.

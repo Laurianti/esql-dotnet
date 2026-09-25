@@ -18,6 +18,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(FrozenTaggedProduct))]
 [JsonSerializable(typeof(InterfaceTaggedProduct))]
+[JsonSerializable(typeof(TypedValuesProduct))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
 [JsonSerializable(typeof(OptionalCountProjection))]
@@ -154,6 +155,31 @@ public class FrozenTaggedProduct
 public class InterfaceTaggedProduct
 {
 	public ICollection<string> Tags { get; set; } = [];
+}
+
+/// <summary>
+/// Document with multi-value fields whose values C# compares through a conversion, as it does
+/// enums and the narrow integers, or with a value computed when the query runs, as a date is.
+/// </summary>
+public class TypedValuesProduct
+{
+	public List<Priority> Priorities { get; set; } = [];
+
+	public List<Grade> Grades { get; set; } = [];
+
+	public List<short> Sizes { get; set; } = [];
+
+	public List<byte> Scores { get; set; } = [];
+
+	public List<DateTime> Restocks { get; set; } = [];
+}
+
+/// <summary>Enum written by name wherever it appears, through the converter on the type.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<Grade>))]
+public enum Grade
+{
+	Low,
+	High
 }
 
 /// <summary>Writes each tag in its prefixed form, so the field holds values the query was not given.</summary>
