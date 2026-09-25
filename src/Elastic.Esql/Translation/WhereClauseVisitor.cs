@@ -742,7 +742,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 		}
 
-		if (node.Object is null || node.Arguments.Count != 1 || !IsEnumerableType(node.Object.Type))
+		if (node.Object is null || node.Arguments.Count != 1 || !IsNonStringEnumerable(node.Object.Type))
 			return false;
 
 		valueExpression = node.Arguments[0];
@@ -779,17 +779,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			break;
 		}
 
-		return IsEnumerableType(current.Type) ? current : null;
+		return IsNonStringEnumerable(current.Type) ? current : null;
 	}
 
-	private static bool IsEnumerableType(Type type) =>
+	private static bool IsNonStringEnumerable(Type type) =>
 		type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type);
 
 	private static bool TryGetCollectionValue(Expression expression, out IEnumerable? collection)
 	{
 		collection = null;
 
-		if (!IsEnumerableType(expression.Type))
+		if (!IsNonStringEnumerable(expression.Type))
 			return false;
 
 		try
@@ -1802,14 +1802,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// a document matches MATCH when any of the field's values does
 		if (!all)
 		{
-			AppendPresentMatches(name, [RenderValue(predicate, 0)]);
+			AppendPresentMatches(name, [TranslateSubExpression(predicate.Values[0])]);
 			return;
 		}
 
 		// every value equals v: the field holds one distinct value, and it matches.
 		// A missing field has no value that differs, as All() over an empty sequence is true.
 		_ = _builder.Append('(').Append(name).Append(" IS NULL OR (MV_COUNT(MV_DEDUPE(").Append(name).Append(")) == 1 AND ");
-		AppendMatch(name, RenderValue(predicate, 0));
+		AppendMatch(name, TranslateSubExpression(predicate.Values[0]));
 		_ = _builder.Append("))");
 	}
 
@@ -1840,7 +1840,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
 		}
 
-		AppendPresentMatches(name, [.. Enumerable.Range(0, predicate.Values.Count).Select(i => RenderValue(predicate, i))]);
+		AppendPresentMatches(name, [.. predicate.Values.Select(TranslateSubExpression)]);
 	}
 
 	/// <summary>
@@ -1866,7 +1866,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
 
 		_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
-			.Append(RenderValue(predicate, 0)).Append(')');
+			.Append(TranslateSubExpression(predicate.Values[0])).Append(')');
 	}
 
 	/// <summary>
@@ -2008,14 +2008,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		expression is BinaryExpression binary
 		&& binary.NodeType == comparison
 		&& ((binary.Left == element && IsNullConstant(binary.Right)) || (binary.Right == element && IsNullConstant(binary.Left)));
-
-	/// <summary>
-	/// A value of an element predicate, rendered as a scalar comparison renders it: a
-	/// captured variable as a query parameter when <c>InlineParameters</c> is off, a literal
-	/// inline, and a value such as <c>DateTime.UtcNow.AddDays(-7)</c> as its translation.
-	/// </summary>
-	private string RenderValue(ElementPredicate predicate, int index) =>
-		TranslateSubExpression(predicate.Values[index]);
 
 	private static Expression StripQuotes(Expression expression)
 	{
