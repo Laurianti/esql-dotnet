@@ -77,8 +77,24 @@ internal sealed class SelectProjectionVisitor(EsqlTranslationContext context) : 
 		_activeRenames = [];
 		_referencedFields.Clear();
 
-		// Pass 1: classify all projection members
-		_ = Visit(lambda.Body);
+		// The whole row from the document, Select(o => EsqlMetadata.SourceAs<T>()): the row is
+		// _source, declared as a member with an empty path
+		if (lambda.Body is MethodCallExpression
+			{
+				Method: { Name: nameof(EsqlMetadata.SourceAs), DeclaringType: var rowDecl },
+				Arguments.Count: 0
+			}
+			&& rowDecl == typeof(EsqlMetadata))
+		{
+			var sourceName = _context.ResolveMetadataMemberOrThrow(nameof(EsqlMetadata.Source));
+			_projections.Add(new ProjectionEntry(ProjectionKind.Keep, sourceName, sourceName, null));
+			_context.SourceMembers.Add(new SourceMember(string.Empty, []));
+		}
+		else
+		{
+			// Pass 1: classify all projection members
+			_ = Visit(lambda.Body);
+		}
 
 		var keepFields = new List<string>();
 		var aliases = new List<(string Source, string Target)>();
