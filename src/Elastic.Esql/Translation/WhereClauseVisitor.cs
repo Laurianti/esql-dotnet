@@ -41,6 +41,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// them instead of evaluating the same closure chain (and its getters) a second time.
 	private readonly Dictionary<Expression, object?> _resolvedCaptures = [];
 
+	// MATCH is emitted once per value of a captured collection, and the commands before the
+	// WHERE are the same for each: their position is checked once
+	private bool _matchPositionChecked;
+
 	private enum ElementPredicateKind
 	{
 		Equal,
@@ -66,6 +70,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		_ = _builder.Clear();
 		_resolvedCaptures.Clear();
+		_matchPositionChecked = false;
 		_ = Visit(expression);
 		return _builder.ToString();
 	}
@@ -1421,6 +1426,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 
 		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
+		var name = ResolveMultiValueField(source);
 
 		// field.Any() with no predicate: the field simply has to hold a value
 		if (node.Method.Name == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
@@ -1428,13 +1434,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
 			// array is stored as a missing field, so IS NOT NULL is the same test, and one
 			// Lucene answers as an exists query
-			_ = _builder.Append(ResolveMultiValueField(source)).Append(" IS NOT NULL");
+			_ = _builder.Append(name).Append(" IS NOT NULL");
 			return true;
 		}
 
 		return node.Method.Name == "Contains"
-			? TryVisitFieldContains(node, source)
-			: TryVisitQuantifier(node, source);
+			? TryVisitFieldContains(node, source, name)
+			: TryVisitQuantifier(node, name);
 	}
 
 	/// <summary>
@@ -1531,7 +1537,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// answered as that, and only that overload: one taking a comparer asks for a comparison
 	/// the translation cannot honour.
 	/// </summary>
-	private bool TryVisitFieldContains(MethodCallExpression node, Expression source)
+	private bool TryVisitFieldContains(MethodCallExpression node, Expression source, string name)
 	{
 		if (TakesAnEqualityComparer(node))
 			throw ContainsWithAnEqualityComparer();
@@ -1539,21 +1545,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (node.Arguments.Count != (node.Method.IsStatic ? 2 : 1))
 			return false;
 
-		var compared = GetComparedValue(node.Arguments[^1], ElementType(source.Type), ResolveMultiValueField(source));
+		var compared = GetComparedValue(node.Arguments[^1], ElementType(source.Type), name);
 
-		return TryAppendQuantified(source, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
+		return TryAppendQuantified(name, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
 	}
 
 	/// <summary><c>field.Any(predicate)</c> and <c>field.All(predicate)</c>, over one predicate on the element.</summary>
-	private bool TryVisitQuantifier(MethodCallExpression node, Expression source)
+	private bool TryVisitQuantifier(MethodCallExpression node, string name)
 	{
 		if (StripQuotes(node.Arguments[^1]) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
 
-		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], ResolveMultiValueField(source), negated: false);
+		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], name, negated: false);
 
 		return predicate is not null
-			&& TryAppendQuantified(source, all: node.Method.Name == "All", predicate.Value);
+			&& TryAppendQuantified(name, all: node.Method.Name == "All", predicate.Value);
 	}
 
 	/// <summary>
@@ -1761,10 +1767,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Any(P) and All(P) over the values of a field. A negated predicate is pushed into
 	/// the quantifier, since Any(not P) is "not All(P)" and All(not P) is "not Any(P)".
 	/// </summary>
-	private bool TryAppendQuantified(Expression field, bool all, ElementPredicate predicate)
+	private bool TryAppendQuantified(string name, bool all, ElementPredicate predicate)
 	{
-		var name = ResolveMultiValueField(field);
-
 		// "Any(not P)" is "not All(P)" and "All(not P)" is "not Any(P)": the negation
 		// moves onto the quantifier, which flips
 		if (predicate.Negated)
@@ -1956,6 +1960,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// are generally available, and this is the place to revisit then.
 	private void ThrowIfMatchFollowsLimitStatsOrFork()
 	{
+		if (_matchPositionChecked)
+			return;
+
+		_matchPositionChecked = true;
 		var command = FindCommandBlockingMatch(_context.Commands) ?? _context.ParentCommandBlockingMatch;
 
 		if (command is not null)
