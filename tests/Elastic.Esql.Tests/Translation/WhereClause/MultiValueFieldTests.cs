@@ -1297,6 +1297,21 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsInAForkBranchAfterTake_ThrowsNotSupported()
+	{
+		// Elasticsearch verifies a branch on top of the pipeline before the Fork, so the LIMIT
+		// there is in the way of MATCH in the branch as well
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Take(10)
+			.Fork(b => b.Where(p => p.Tags.Contains("iot")), b => b.Take(5));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT*");
+	}
+
+	[Test]
 	public void Where_ContainsInsideAForkBranch_TranslatesToMatch()
 	{
 		// a branch is a pipeline of its own, so the FORK it belongs to does not precede its WHERE

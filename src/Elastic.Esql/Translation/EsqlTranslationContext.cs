@@ -32,6 +32,13 @@ internal sealed class EsqlTranslationContext
 	public bool HasProjected { get; set; }
 
 	/// <summary>
+	/// In a Fork branch, the LIMIT, STATS or FORK of the parent pipeline that Elasticsearch does
+	/// not allow MATCH after: a branch is verified on top of that pipeline, so the command is in
+	/// the way of a MATCH in the branch as well.
+	/// </summary>
+	public string? ParentCommandBlockingMatch { get; set; }
+
+	/// <summary>
 	/// Named-parameter accumulator. Settable internally so sub-pipeline visitors (e.g. FORK
 	/// branches) can share the parent's instance and avoid losing parameters at branch boundaries.
 	/// </summary>

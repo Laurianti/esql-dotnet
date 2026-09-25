@@ -16,6 +16,7 @@ using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Formatting;
 using Elastic.Esql.Functions;
+using Elastic.Esql.QueryModel;
 using Elastic.Esql.QueryModel.Commands;
 
 namespace Elastic.Esql.Translation;
@@ -1941,13 +1942,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// are generally available, and this is the place to revisit then.
 	private void ThrowIfMatchFollowsLimitStatsOrFork()
 	{
-		var command = _context.Commands.FirstOrDefault(c => c is LimitCommand or StatsCommand or ForkCommand) switch
-		{
-			LimitCommand => "LIMIT",
-			StatsCommand => "STATS",
-			ForkCommand => "FORK",
-			_ => null
-		};
+		var command = FindCommandBlockingMatch(_context.Commands) ?? _context.ParentCommandBlockingMatch;
 
 		if (command is not null)
 		{
@@ -1956,6 +1951,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ $"which Elasticsearch does not allow after {command}.");
 		}
 	}
+
+	/// <summary>The first LIMIT, STATS or FORK among the commands, which Elasticsearch does not allow MATCH after.</summary>
+	internal static string? FindCommandBlockingMatch(IEnumerable<QueryCommand> commands) =>
+		commands.FirstOrDefault(c => c is LimitCommand or StatsCommand or ForkCommand) switch
+		{
+			LimitCommand => "LIMIT",
+			StatsCommand => "STATS",
+			ForkCommand => "FORK",
+			_ => null
+		};
 
 	/// <summary>
 	/// MATCH over each value, any of them matching, with a document that has no values
