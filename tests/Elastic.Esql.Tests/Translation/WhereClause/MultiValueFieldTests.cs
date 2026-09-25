@@ -861,6 +861,22 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsOverAListOfUris_TranslatesToMatch()
+	{
+		// a Uri is a class, but the serializer writes it as a string, which MATCH compares
+		var esql = CreateQuery<LinkedProduct>()
+			.From("products")
+			.Where(p => p.Links.Contains(new Uri("https://www.elastic.co/")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (links IS NOT NULL AND MATCH(links, "https://www.elastic.co/"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_ContainsOverACollectionOfObjects_ThrowsNotSupported()
 	{
 		var line = new ProductLine { Sku = "a" };

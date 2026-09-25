@@ -19,6 +19,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(FrozenTaggedProduct))]
 [JsonSerializable(typeof(InterfaceTaggedProduct))]
 [JsonSerializable(typeof(TypedValuesProduct))]
+[JsonSerializable(typeof(LinkedProduct))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
 [JsonSerializable(typeof(OptionalCountProjection))]
@@ -172,6 +173,12 @@ public class TypedValuesProduct
 	public List<byte> Scores { get; set; } = [];
 
 	public List<DateTime> Restocks { get; set; } = [];
+}
+
+/// <summary>Document whose links are a class the serializer writes as a string.</summary>
+public class LinkedProduct
+{
+	public List<Uri> Links { get; set; } = [];
 }
 
 /// <summary>Enum written by name wherever it appears, through the converter on the type.</summary>

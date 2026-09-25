@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Formatting;
@@ -1403,7 +1404,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// A collection of objects is an object in the mapping: ES|QL has a column for each
 		// of its fields and none for the objects themselves, so there is nothing to count
 		// or to compare a value with.
-		if (ExpressionTranslationHelpers.IsObjectSelectionType(ElementType(source.Type)))
+		if (IsWrittenAsObject(ElementType(source.Type)))
 		{
 			throw new NotSupportedException(
 				$"{methodName} over a collection of objects is not supported: ES|QL has a column for "
@@ -1756,6 +1757,24 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	private static Type ElementType(Type collectionType) =>
 		TypeHelper.FindGenericType(typeof(IEnumerable<>), collectionType)!.GetGenericArguments()[0];
+
+	/// <summary>
+	/// Whether the serializer writes the values as objects, for which ES|QL has a column for
+	/// each of their fields and none for the values themselves. The type alone does not say:
+	/// a Uri is a class, and the serializer writes it as a string.
+	/// </summary>
+	private bool IsWrittenAsObject(Type elementType)
+	{
+		try
+		{
+			return _context.Metadata.Options.GetTypeInfo(elementType).Kind is JsonTypeInfoKind.Object or JsonTypeInfoKind.Dictionary;
+		}
+		catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+		{
+			// a type the serializer has no contract for is judged by its shape
+			return ExpressionTranslationHelpers.IsObjectSelectionType(elementType);
+		}
+	}
 
 	private static string TypeName(Type type) =>
 		type.Name.IndexOf('`') is var arity and >= 0 ? type.Name.Substring(0, arity) : type.Name;
