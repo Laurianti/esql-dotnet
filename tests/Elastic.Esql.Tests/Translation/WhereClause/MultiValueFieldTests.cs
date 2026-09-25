@@ -996,6 +996,21 @@ public class MultiValueFieldTests : EsqlTestBase
             """.NativeLineEndings());
 	}
 
+	[Test]
+	public void Where_AnyWithAMethodOtherThanContains_ThrowsNotSupported()
+	{
+		// Remove takes one value and returns a bool, as Contains does, but it tests no membership
+		var seen = new List<string> { "iot" };
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => seen.Remove(t)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
 	/// <summary>
 	/// Translates the predicate of a Where over an in-memory source, the way the query
 	/// syntax leaves it behind transparent identifiers.

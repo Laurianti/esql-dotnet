@@ -1547,8 +1547,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return new ElementPredicate(kind, [constant], Negated: negated, [CapturedName(call.Arguments[0])]);
 		}
 
-		// values.Contains(x), over a constant collection
-		if (!TryGetContainsArguments(call, out var valueExpression, out var collection)
+		// values.Contains(x), over a constant collection: another method taking one value and
+		// returning a bool, such as Remove, is no membership test
+		if (call.Method.Name != "Contains"
+			|| !TryGetContainsArguments(call, out var valueExpression, out var collection)
 			|| valueExpression != element
 			|| collection is null)
 			return null;
