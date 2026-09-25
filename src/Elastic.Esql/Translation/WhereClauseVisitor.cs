@@ -1526,7 +1526,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, string field, bool negated)
 	{
 		var value = TryGetComparand(comparison, element, field, out _);
-		var compared = value is null ? null : TryGetComparedValue(value, element, field);
+		var compared = value is null ? null : TryGetComparedValue(value, element.Type, field);
 		if (compared is null)
 			return null;
 
@@ -1542,7 +1542,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		// "10 < x" is "x > 10": keep the element on the left
 		var value = TryGetComparand(ordering, element, field, out var elementOnLeft);
-		var compared = value is null ? null : TryGetComparedValue(value, element, field);
+		var compared = value is null ? null : TryGetComparedValue(value, element.Type, field);
 		if (compared is null)
 			return null;
 
@@ -1581,7 +1581,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// as a scalar comparison renders it, a date computed from DateTime.UtcNow included. A
 	/// value that reads another field is refused, and so is null, which a stored value never is.
 	/// </summary>
-	private Expression? TryGetComparedValue(Expression value, ParameterExpression element, string field)
+	private Expression? TryGetComparedValue(Expression value, Type elementType, string field)
 	{
 		if (ReadsAField(value))
 			throw ComparisonWithAnotherField(field);
@@ -1589,7 +1589,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (ResolvesToNull(value))
 			throw ComparisonWithNull(field);
 
-		var enumType = Nullable.GetUnderlyingType(element.Type) ?? element.Type;
+		var enumType = Nullable.GetUnderlyingType(elementType) ?? elementType;
 		if (!enumType.IsEnum)
 			return value;
 
@@ -1763,22 +1763,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
+	/// <summary><c>field.Contains(value)</c>, which is <c>field.Any(x =&gt; x == value)</c> and is answered as that.</summary>
 	private bool TryAppendMatch(Expression field, Expression value)
 	{
-		var column = ResolveMultiValueField(field);
+		var compared = TryGetComparedValue(value, ElementType(field.Type), ResolveMultiValueField(field));
 
-		if (ReadsAField(value))
-			throw ComparisonWithAnotherField(column);
-
-		if (!TryGetConstant(value, out var constant))
-			return ResolvesToNull(value) ? throw ComparisonWithNull(column) : false;
-
-		var name = CapturedName(value);
-
-		AppendPresentMatches(
-			column,
-			[name is null ? _context.FormatValue(constant, null) : _context.GetValueOrParameterName(name, constant)]);
-		return true;
+		return compared is not null
+			&& TryAppendQuantified(field, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
 	}
 
 	/// <summary>
@@ -2020,10 +2011,4 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			|| definition.FullName is "System.Collections.Immutable.ImmutableArray`1"
 				or "System.Collections.Immutable.ImmutableList`1";
 	}
-
-	private static string? CapturedName(Expression expression) =>
-		expression is MemberExpression { Expression: ConstantExpression or MemberExpression } member
-			? member.Member.Name
-			: null;
-
 }

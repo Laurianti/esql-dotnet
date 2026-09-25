@@ -398,6 +398,24 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsWithAComputedValue_TranslatesItAsAScalarComparisonDoes()
+	{
+		// Contains renders its value as Any over equality does, and as a scalar comparison
+		var tag = "IOT";
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains(tag.ToLowerInvariant()))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND MATCH(tags, TO_LOWER("IOT")))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_ContainsWithALiteral_StaysInlineWithoutInlineParameters()
 	{
 		var esql = CreateQuery<TaggedProduct>()
