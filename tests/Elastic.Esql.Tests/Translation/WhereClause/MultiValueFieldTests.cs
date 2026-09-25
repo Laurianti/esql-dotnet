@@ -1349,6 +1349,33 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsAfterARawLimit_ThrowsNotSupported()
+	{
+		// a raw fragment is text, and a LIMIT written there is in the way of MATCH as well
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("limit 10")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT*");
+	}
+
+	[Test]
+	public void Where_ContainsAfterARawStats_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("STATS n = COUNT(*) BY tags")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after STATS*");
+	}
+
+	[Test]
 	public void Where_ContainsInAForkBranchAfterTake_ThrowsNotSupported()
 	{
 		// Elasticsearch verifies a branch on top of the pipeline before the Fork, so the LIMIT

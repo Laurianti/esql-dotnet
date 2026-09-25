@@ -1974,15 +1974,33 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
-	/// <summary>The first LIMIT, STATS or FORK among the commands, which Elasticsearch does not allow MATCH after.</summary>
+	/// <summary>
+	/// The first LIMIT, STATS or FORK among the commands, which Elasticsearch does not allow MATCH
+	/// after. A raw fragment is text, and its first word says which command it is.
+	/// </summary>
 	internal static string? FindCommandBlockingMatch(IEnumerable<QueryCommand> commands) =>
-		commands.FirstOrDefault(c => c is LimitCommand or StatsCommand or ForkCommand) switch
-		{
-			LimitCommand => "LIMIT",
-			StatsCommand => "STATS",
-			ForkCommand => "FORK",
-			_ => null
-		};
+		commands
+			.Select(command => command switch
+			{
+				LimitCommand => "LIMIT",
+				StatsCommand => "STATS",
+				ForkCommand => "FORK",
+				RawFragmentCommand raw => FindKeywordBlockingMatch(raw.Fragment),
+				_ => null
+			})
+			.FirstOrDefault(command => command is not null);
+
+	// ES|QL keywords are case-insensitive and any whitespace may follow them, as ForkBranchVisitor
+	// reads a raw LIMIT
+	private static string? FindKeywordBlockingMatch(string fragment)
+	{
+		var trimmed = fragment.TrimStart();
+		var keywords = new[] { "LIMIT", "STATS", "FORK" };
+
+		return Array.Find(keywords, keyword =>
+			trimmed.StartsWith(keyword, StringComparison.OrdinalIgnoreCase)
+			&& (trimmed.Length == keyword.Length || char.IsWhiteSpace(trimmed[keyword.Length])));
+	}
 
 	/// <summary>
 	/// MATCH over each value, any of them matching, with a document that has no values
