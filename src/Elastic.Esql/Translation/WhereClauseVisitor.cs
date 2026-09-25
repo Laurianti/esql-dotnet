@@ -1683,6 +1683,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if ((Nullable.GetUnderlyingType(unwrapped.Type) ?? unwrapped.Type) == enumType)
 			return unwrapped;
 
+		// a captured number cast to the enum keeps its name as a parameter, which holds the enum;
+		// the value the null check resolved is reused rather than read a second time
+		if (_resolvedCaptures.TryGetValue(unwrapped, out var captured) && captured is not null)
+		{
+			_resolvedCaptures[unwrapped] = Enum.ToObject(enumType, captured);
+			return unwrapped;
+		}
+
 		return TryGetConstant(unwrapped, out var number) && number is not null
 			? Expression.Constant(Enum.ToObject(enumType, number), enumType)
 			: value;

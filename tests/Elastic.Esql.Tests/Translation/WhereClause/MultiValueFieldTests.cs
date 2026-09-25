@@ -1475,6 +1475,39 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyWithACapturedNumberCastToAnEnum_ParameterizesTheEnum()
+	{
+		// the captured number keeps its name as a parameter, which holds the enum it is cast to
+		var level = 1;
+
+		var query = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Any(g => g == (Grade)level));
+
+		var esql = query.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (grades IS NOT NULL AND MATCH(grades, ?level))
+            """.NativeLineEndings());
+		_ = query.GetParameters()!.Parameters["level"].GetString().Should().Be("High");
+	}
+
+	[Test]
+	public void Where_AnyWithACapturedNumberCastToAnEnum_ReadsTheValueOnce()
+	{
+		var holder = new CountingNumber(1);
+
+		_ = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Any(g => g == (Grade)holder.Value))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
+
+	[Test]
 	public void Where_AnyWithAComputedEnumValue_TranslatesItAsAScalarComparisonDoes()
 	{
 		// a number read only when the query runs is rendered as it is, as a scalar comparison
@@ -1561,5 +1594,19 @@ public class MultiValueFieldTests : EsqlTestBase
 		public static bool Any<T>(IEnumerable<T> source, Func<T, bool> predicate) => source.Any(predicate);
 
 		public static bool SameTag(string value, IEqualityComparer<string> comparer) => comparer.Equals(value, "iot");
+	}
+
+	private sealed class CountingNumber(int value)
+	{
+		public int Reads { get; private set; }
+
+		public int Value
+		{
+			get
+			{
+				Reads++;
+				return value;
+			}
+		}
 	}
 }
