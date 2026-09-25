@@ -1052,14 +1052,26 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return finder.Found;
 	}
 
-	/// <summary>Finds the lambda parameter anywhere in an expression, or the one given.</summary>
+	/// <summary>
+	/// Finds the lambda parameter anywhere in an expression, or the one given. The parameter
+	/// of a lambda inside the expression, such as the w of wanted.Where(w => w.Length > 2), is
+	/// bound there, and a function of a captured value is a value all the same.
+	/// </summary>
 	private sealed class ParameterFinder(ParameterExpression? parameter = null) : ExpressionVisitor
 	{
+		private readonly HashSet<ParameterExpression> _bound = [];
+
 		public bool Found { get; private set; }
+
+		protected override Expression VisitLambda<T>(Expression<T> node)
+		{
+			_bound.UnionWith(node.Parameters);
+			return base.VisitLambda(node);
+		}
 
 		protected override Expression VisitParameter(ParameterExpression node)
 		{
-			Found |= parameter is null || node == parameter;
+			Found |= !_bound.Contains(node) && (parameter is null || node == parameter);
 			return base.VisitParameter(node);
 		}
 	}
@@ -1807,7 +1819,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// object in the mapping rather than a list of values, and is not.
 	/// </summary>
 	private static bool IsMultiValueField(Expression expression) =>
-		ContainsParameter(expression) && TypeHelper.IsEnumerableType(expression.Type);
+		ReadsAField(expression) && TypeHelper.IsEnumerableType(expression.Type);
 
 	private static Type ElementType(Type collectionType) =>
 		TypeHelper.FindGenericType(typeof(IEnumerable<>), collectionType)!.GetGenericArguments()[0];
@@ -1911,15 +1923,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		_ = _builder.Append(')');
 	}
-
-	private static bool ContainsParameter(Expression expression) => expression switch
-	{
-		ParameterExpression => true,
-		MemberExpression member => member.Expression is not null && ContainsParameter(member.Expression),
-		UnaryExpression unary => ContainsParameter(unary.Operand),
-		MethodCallExpression call => call.Object is not null && ContainsParameter(call.Object),
-		_ => false
-	};
 
 	private static bool IsNullGuard(Expression expression, ParameterExpression element, ExpressionType comparison) =>
 		expression is BinaryExpression binary

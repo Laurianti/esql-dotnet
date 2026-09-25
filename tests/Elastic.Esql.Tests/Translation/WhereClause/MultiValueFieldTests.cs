@@ -665,6 +665,20 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsOverAFilteredField_ThrowsNotSupported()
+	{
+		// Where reads the field through an argument of a static call, so the source is the
+		// field's and not a captured collection's
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Where(t => t != "").Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*p.Tags.Where*");
+	}
+
+	[Test]
 	public void Where_AnyBehindTransparentIdentifiers_StripsAllPrefixes()
 	{
 		var source = new[] { new { Outer = new { Outer = new TaggedProduct() } } }.AsQueryable();
