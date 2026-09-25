@@ -1221,6 +1221,23 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyWithAComputedEnumValue_TranslatesItAsAScalarComparisonDoes()
+	{
+		// a number read only when the query runs is rendered as it is, as a scalar comparison
+		// renders it
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Priorities.Any(x => x == (Priority)Math.Abs(-2)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (priorities IS NOT NULL AND MATCH(priorities, ABS(-2)))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_AnyWithAnOrderingOnNarrowIntegers_TranslatesToMvMax()
 	{
 		// a short and a byte are compared as int: "s > 3" is "(int)s > 3"

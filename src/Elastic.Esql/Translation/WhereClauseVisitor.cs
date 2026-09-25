@@ -1502,10 +1502,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (node.Arguments.Count != (node.Method.IsStatic ? 2 : 1))
 			return false;
 
-		var compared = TryGetComparedValue(node.Arguments[^1], ElementType(source.Type), ResolveMultiValueField(source));
+		var compared = GetComparedValue(node.Arguments[^1], ElementType(source.Type), ResolveMultiValueField(source));
 
-		return compared is not null
-			&& TryAppendQuantified(source, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
+		return TryAppendQuantified(source, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
 	}
 
 	/// <summary><c>field.Any(predicate)</c> and <c>field.All(predicate)</c>, over one predicate on the element.</summary>
@@ -1566,10 +1565,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, string field, bool negated)
 	{
 		var value = TryGetComparand(comparison, element, field, out _);
-		var compared = value is null ? null : TryGetComparedValue(value, element.Type, field);
-		if (compared is null)
+		if (value is null)
 			return null;
 
+		var compared = GetComparedValue(value, element.Type, field);
 		var isEqual = comparison.NodeType == ExpressionType.Equal;
 		return new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: isEqual ? negated : !negated);
 	}
@@ -1582,9 +1581,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		// "10 < x" is "x > 10": keep the element on the left
 		var value = TryGetComparand(ordering, element, field, out var elementOnLeft);
-		var compared = value is null ? null : TryGetComparedValue(value, element.Type, field);
-		if (compared is null)
+		if (value is null)
 			return null;
+
+		var compared = GetComparedValue(value, element.Type, field);
 
 		var kind = (ordering.NodeType, elementOnLeft) switch
 		{
@@ -1621,7 +1621,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// as a scalar comparison renders it, a date computed from DateTime.UtcNow included. A
 	/// value that reads another field is refused, and so is null, which a stored value never is.
 	/// </summary>
-	private Expression? TryGetComparedValue(Expression value, Type elementType, string field)
+	private Expression GetComparedValue(Expression value, Type elementType, string field)
 	{
 		if (ReadsAField(value))
 			throw ComparisonWithAnotherField(field);
@@ -1634,14 +1634,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return value;
 
 		// "x == Priority.High" reaches the tree as "(int)x == 2": the number is turned back into
-		// the enum, as a scalar comparison does, so that an enum written by name is compared by name
+		// the enum, as a scalar comparison does, so that an enum written by name is compared by
+		// name. A number read only when the query runs stays as it is, as in a scalar comparison.
 		var unwrapped = value.UnwrapConvertExpressions();
 		if ((Nullable.GetUnderlyingType(unwrapped.Type) ?? unwrapped.Type) == enumType)
 			return unwrapped;
 
 		return TryGetConstant(unwrapped, out var number) && number is not null
 			? Expression.Constant(Enum.ToObject(enumType, number), enumType)
-			: null;
+			: value;
 	}
 
 	private static NotSupportedException ComparisonWithAnotherField(string field) => new(
