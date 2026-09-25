@@ -920,6 +920,82 @@ public class MultiValueFieldTests : EsqlTestBase
             """.NativeLineEndings());
 	}
 
+	[Test]
+	public void Where_ContainsAfterTake_ThrowsNotSupported()
+	{
+		// Elasticsearch rejects MATCH after LIMIT, so the query is refused when it is translated
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Take(10)
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT*");
+	}
+
+	[Test]
+	public void Where_ContainsAfterGroupBy_ThrowsNotSupported()
+	{
+		// the Where lands behind STATS, where MATCH is rejected as it is after LIMIT
+		var query = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => new { Level = g.Key, Ips = EsqlFunctions.Values(g, l => l.ClientIp) })
+			.Where(r => r.Ips.Contains("10.0.0.1"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after STATS*");
+	}
+
+	[Test]
+	public void Where_ContainsAfterFork_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Fork(b => b.Take(10), b => b.Take(20))
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after FORK*");
+	}
+
+	[Test]
+	public void Where_AnyWithAnOrderingAfterTake_TranslatesToMvMax()
+	{
+		// MV_MAX is evaluated per row, so a LIMIT before it is no obstacle
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Take(10)
+			.Where(p => p.Ratings.Any(r => r > 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | LIMIT 10
+            | WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_ContainsInsideAForkBranch_TranslatesToMatch()
+	{
+		// a branch is a pipeline of its own, so the FORK it belongs to does not precede its WHERE
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Fork(b => b.Where(p => p.Tags.Contains("iot")), b => b.Take(10))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | FORK (WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))) (LIMIT 10)
+            """.NativeLineEndings());
+	}
+
 	/// <summary>
 	/// Translates the predicate of a Where over an in-memory source, the way the query
 	/// syntax leaves it behind transparent identifiers.

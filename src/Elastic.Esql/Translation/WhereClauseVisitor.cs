@@ -14,6 +14,7 @@ using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Formatting;
 using Elastic.Esql.Functions;
+using Elastic.Esql.QueryModel.Commands;
 
 namespace Elastic.Esql.Translation;
 
@@ -1737,8 +1738,35 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// MATCH is an analyzed search on a text-mapped field, so it matches more than equality
 	// does. MV_CONTAINS (preview since 9.2) and MV_INTERSECTS (preview since 9.4) are the
 	// exact primitives, and replace this once they are generally available.
-	private void AppendMatch(string field, string renderedValue) =>
+	private void AppendMatch(string field, string renderedValue)
+	{
+		ThrowIfMatchFollowsLimitStatsOrFork();
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
+	}
+
+	// Elasticsearch rejects MATCH after LIMIT, STATS and FORK, and would only say so when the
+	// query runs. MV_CONTAINS for equality and Contains, and MV_INTERSECTS for membership in a
+	// captured collection, lift this: both are evaluated per row rather than through the index,
+	// so the position rule does not apply to them, and nothing is pushed to the index after
+	// those commands anyway. Both are still preview (9.2 and 9.4): the refusal stays until they
+	// are generally available, and this is the place to revisit then.
+	private void ThrowIfMatchFollowsLimitStatsOrFork()
+	{
+		var command = _context.Commands.FirstOrDefault(c => c is LimitCommand or StatsCommand or ForkCommand) switch
+		{
+			LimitCommand => "LIMIT",
+			StatsCommand => "STATS",
+			ForkCommand => "FORK",
+			_ => null
+		};
+
+		if (command is not null)
+		{
+			throw new NotSupportedException(
+				$"A predicate on a multi-value field is not supported after {command}: it translates to MATCH, "
+				+ $"which Elasticsearch does not allow after {command}.");
+		}
+	}
 
 	/// <summary>
 	/// MATCH over each value, any of them matching, with a document that has no values
