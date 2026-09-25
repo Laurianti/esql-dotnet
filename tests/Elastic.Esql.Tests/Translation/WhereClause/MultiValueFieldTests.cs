@@ -12,7 +12,7 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 
 /// <summary>
 /// Any, All and Contains over multi-value document fields, answered over the field as a
-/// whole: MATCH for a value, MV_MIN and MV_MAX for an ordering, MV_COUNT for Any(), with
+/// whole: MATCH for a value, MV_MIN and MV_MAX for an ordering, IS NOT NULL for Any(), with
 /// none of the row duplication MV_EXPAND would introduce. A shape whose values cannot be
 /// compared that way is refused with a message that says why.
 /// </summary>
@@ -64,10 +64,10 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_AnyWithoutPredicate_TranslatesToMvCount()
+	public void Where_AnyWithoutPredicate_TranslatesToIsNotNull()
 	{
-		// the count is coalesced: a missing field is an empty sequence, where Any() is false
-		// and its negation true
+		// an empty array is stored as a missing field, so a field that is present holds at
+		// least one value
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Any())
@@ -76,7 +76,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE COALESCE(MV_COUNT(tags), 0) > 0
+            | WHERE tags IS NOT NULL
             """.NativeLineEndings());
 	}
 
@@ -618,7 +618,7 @@ public class MultiValueFieldTests : EsqlTestBase
 	{
 		var source = new[] { new { Outer = new { Outer = new TaggedProduct() } } }.AsQueryable();
 
-		_ = Translate(source.Where(x => x.Outer.Outer.Tags.Any())).Should().Be("COALESCE(MV_COUNT(tags), 0) > 0");
+		_ = Translate(source.Where(x => x.Outer.Outer.Tags.Any())).Should().Be("tags IS NOT NULL");
 	}
 
 	[Test]

@@ -1426,9 +1426,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// field.Any() with no predicate: the field simply has to hold a value
 		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
 		{
-			// MV_COUNT is null over a missing field, and so would be the negation; LINQ
-			// reads a missing field as an empty sequence, where Any() is simply false
-			_ = _builder.Append("COALESCE(MV_COUNT(").Append(ResolveMultiValueField(source)).Append("), 0) > 0");
+			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
+			// array is stored as a missing field, so IS NOT NULL is the same test, and one
+			// Lucene answers as an exists query
+			_ = _builder.Append(ResolveMultiValueField(source)).Append(" IS NOT NULL");
 			return true;
 		}
 

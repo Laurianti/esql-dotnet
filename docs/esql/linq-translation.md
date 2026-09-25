@@ -161,7 +161,7 @@ A field that holds more than one value is tested as a whole, with the function t
 ```csharp
 .Where(p => p.Tags.Any(t => t == "water"))        // WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
 .Where(p => p.Tags.Contains("water"))             // WHERE (tags IS NOT NULL AND MATCH(tags, "water"))
-.Where(p => p.Tags.Any())                         // WHERE COALESCE(MV_COUNT(tags), 0) > 0
+.Where(p => p.Tags.Any())                         // WHERE tags IS NOT NULL
 .Where(p => p.Ratings.Any(r => r > 3))            // WHERE (ratings IS NOT NULL AND MV_MAX(ratings) > 3)
 .Where(p => p.Ratings.All(r => r > 3))            // WHERE (ratings IS NULL OR MV_MIN(ratings) > 3)
 .Where(p => p.Tags.Any(t => wanted.Contains(t)))  // WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
