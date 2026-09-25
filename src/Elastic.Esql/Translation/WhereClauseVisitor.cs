@@ -25,6 +25,13 @@ namespace Elastic.Esql.Translation;
 /// </summary>
 internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : ExpressionVisitor
 {
+	/// <summary>
+	/// How many values of a collection an Any over it may test, each with its own MATCH.
+	/// Each one adds a level to the expression Elasticsearch parses, and it stops
+	/// accepting them past this.
+	/// </summary>
+	private const int MaxMatchedValues = 256;
+
 	private readonly EsqlTranslationContext _context = context ?? throw new ArgumentNullException(nameof(context));
 	private readonly StringBuilder _builder = new();
 	private MemberInfo? _comparisonPropertyContext;
@@ -32,6 +39,24 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// Values resolved by the IS NULL rewrite, keyed by the member node so VisitMember can reuse
 	// them instead of evaluating the same closure chain (and its getters) a second time.
 	private readonly Dictionary<Expression, object?> _resolvedCaptures = [];
+
+	private enum ElementPredicateKind
+	{
+		Equal,
+		In,
+		StartsWith,
+		EndsWith,
+		Contains,
+		GreaterThan,
+		GreaterThanOrEqual,
+		LessThan,
+		LessThanOrEqual
+	}
+
+	private readonly record struct ElementPredicate(
+		ElementPredicateKind Kind,
+		IReadOnlyList<Expression> Values,
+		bool Negated);
 
 	/// <summary>
 	/// Translates a predicate expression to an ES|QL condition string.
@@ -1874,24 +1899,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static string TypeName(Type type) =>
 		type.Name.IndexOf('`') is var arity and >= 0 ? type.Name.Substring(0, arity) : type.Name;
 
-	private enum ElementPredicateKind
-	{
-		Equal,
-		In,
-		StartsWith,
-		EndsWith,
-		Contains,
-		GreaterThan,
-		GreaterThanOrEqual,
-		LessThan,
-		LessThanOrEqual
-	}
-
-	private readonly record struct ElementPredicate(
-		ElementPredicateKind Kind,
-		IReadOnlyList<Expression> Values,
-		bool Negated);
-
 	// MATCH is an analyzed search on a text-mapped field, so it matches more than equality
 	// does. MV_CONTAINS (preview since 9.2) and MV_INTERSECTS (preview since 9.4) are the
 	// exact primitives, and replace this once they are generally available.
@@ -1965,13 +1972,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private string RenderValue(ElementPredicate predicate, int index) =>
 		TranslateSubExpression(predicate.Values[index]);
-
-	/// <summary>
-	/// How many values of a collection an Any over it may test, each with its own MATCH.
-	/// Each one adds a level to the expression Elasticsearch parses, and it stops
-	/// accepting them past this.
-	/// </summary>
-	private const int MaxMatchedValues = 256;
 
 	private static Expression StripQuotes(Expression expression)
 	{
