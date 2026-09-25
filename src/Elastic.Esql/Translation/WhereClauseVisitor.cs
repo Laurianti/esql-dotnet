@@ -1077,26 +1077,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return finder.Found;
 	}
 
-	/// <summary>
-	/// Finds the lambda parameter anywhere in an expression, or the one given. The parameter
-	/// of a lambda inside the expression, such as the w of wanted.Where(w => w.Length > 2), is
-	/// bound there, and a function of a captured value is a value all the same.
-	/// </summary>
+	/// <summary>Finds the lambda parameter anywhere in an expression, or the one given.</summary>
 	private sealed class ParameterFinder(ParameterExpression? parameter = null) : ExpressionVisitor
 	{
-		private readonly HashSet<ParameterExpression> _bound = [];
-
 		public bool Found { get; private set; }
-
-		protected override Expression VisitLambda<T>(Expression<T> node)
-		{
-			_bound.UnionWith(node.Parameters);
-			return base.VisitLambda(node);
-		}
 
 		protected override Expression VisitParameter(ParameterExpression node)
 		{
-			Found |= !_bound.Contains(node) && (parameter is null || node == parameter);
+			Found |= parameter is null || node == parameter;
 			return base.VisitParameter(node);
 		}
 	}
