@@ -4,6 +4,7 @@
 
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -1902,14 +1903,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// Whether enumerating the collection and comparing its values with ES|QL's equality
 	/// answers Contains the way the collection does. Only a collection of a known kind
-	/// is taken to: arrays, lists, the LINQ operators, and the immutable and concurrent
-	/// lists of the base library, which all compare with default equality. A set of any
-	/// kind carries its own comparer, a dictionary and its keys likewise, a collection
-	/// type of the caller's own may answer Contains in any way at all, and so may a
-	/// wrapper such as ReadOnlyCollection, which hands Contains to the list it wraps:
-	/// those are refused rather than answered with a comparison they might not make. A
-	/// set built with the default comparer is refused all the same, since telling it
-	/// apart would take reflection the trimmer cannot follow.
+	/// is taken to: arrays, lists and the ReadOnlyCollection AsReadOnly returns, the LINQ
+	/// operators, the immutable and concurrent lists of the base library, and the types
+	/// the compiler generates for an iterator method or a collection expression, which
+	/// all compare with default equality. A set of any kind carries its own comparer, a
+	/// dictionary and its keys likewise, and a collection type of the caller's own may
+	/// answer Contains in any way at all: those are refused rather than answered with a
+	/// comparison they might not make. A set built with the default comparer is refused
+	/// all the same, since telling it apart would take reflection the trimmer cannot follow.
 	/// </summary>
 	private static bool UsesDefaultEquality(IEnumerable collection)
 	{
@@ -1919,6 +1920,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// framework's own assembly; a public type there, such as Lookup, answers Contains
 		// its own way
 		if (type.IsArray || (type.Namespace == "System.Linq" && !type.IsPublic && type.Assembly == typeof(Enumerable).Assembly))
+			return true;
+
+		// an iterator method or a collection expression typed as an interface: the compiler's
+		// types only enumerate the values, or hand Contains to an array or a List
+		if (type.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false))
 			return true;
 
 		if (!type.IsGenericType)
@@ -1934,6 +1940,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			|| definition == typeof(ConcurrentBag<>)
 			|| definition == typeof(ConcurrentQueue<>)
 			|| definition == typeof(ConcurrentStack<>)
+			|| definition == typeof(ReadOnlyCollection<>)
 			|| definition.FullName is "System.Collections.Immutable.ImmutableArray`1"
 				or "System.Collections.Immutable.ImmutableList`1";
 	}

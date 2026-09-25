@@ -731,18 +731,65 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_AnyOverACapturedReadOnlyCollection_ThrowsNotSupported()
+	public void Where_AnyOverACapturedReadOnlyCollection_MatchesEachValue()
 	{
-		// a wrapper hands Contains to the list it wraps, which may compare in any way
-		var wanted = new ReadOnlyCollection<string>(["iot"]);
+		// AsReadOnly wraps the list, whose Contains compares with default equality
+		var wanted = new List<string> { "iot", "water" }.AsReadOnly();
 
-		var query = CreateQuery<TaggedProduct>()
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Any(t => wanted.Contains(t)));
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
 
-		var act = () => query.ToString();
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
+            """.NativeLineEndings());
+	}
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*ReadOnlyCollection*way of its own*");
+	[Test]
+	public void Where_AnyOverACapturedIteratorMethod_MatchesEachValue()
+	{
+		// the type the compiler generates for the iterator only enumerates the values, which
+		// Contains then compares with default equality
+		var wanted = Wanted();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
+            """.NativeLineEndings());
+
+		static IEnumerable<string> Wanted()
+		{
+			yield return "iot";
+			yield return "water";
+		}
+	}
+
+	[Test]
+	public void Where_AnyOverACapturedCollectionExpression_MatchesEachValue()
+	{
+		// typed as an interface, the collection expression is a read-only type the compiler
+		// generates over an array
+		IEnumerable<string> wanted = ["iot", "water"];
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND (MATCH(tags, "iot") OR MATCH(tags, "water")))
+            """.NativeLineEndings());
 	}
 
 	[Test]
