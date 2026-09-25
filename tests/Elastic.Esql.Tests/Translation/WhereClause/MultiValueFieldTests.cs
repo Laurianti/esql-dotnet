@@ -306,6 +306,21 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsOverAFrozenSet_TranslatesToMatch()
+	{
+		var esql = CreateQuery<FrozenTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_ContainsOverAnInterfaceTypedField_TranslatesToMatch()
 	{
 		var esql = CreateQuery<InterfaceTaggedProduct>()

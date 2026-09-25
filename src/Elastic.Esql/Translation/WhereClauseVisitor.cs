@@ -1679,7 +1679,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 	/// <summary>
 	/// Whether the method is the framework's own: Enumerable and MemoryExtensions for the
-	/// static forms, the collections of the base library for the instance ones.
+	/// static forms, the collections of the base library for the instance ones. These are
+	/// recognised by namespace: their assemblies differ between frameworks, HashSet being in
+	/// System.Core and LinkedList, Queue and Stack in System on .NET Framework.
 	/// </summary>
 	private static bool IsFrameworkMethod(MethodInfo method)
 	{
@@ -1691,8 +1693,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (method.IsStatic)
 			return declaring == typeof(Enumerable) || declaring == typeof(MemoryExtensions);
 
-		return declaring.Assembly == typeof(object).Assembly
-			|| declaring.Assembly.GetName().Name is "System.Collections" or "System.Collections.Immutable";
+		return declaring.Namespace is "System.Collections.Concurrent"
+			or "System.Collections.Frozen"
+			or "System.Collections.Generic"
+			or "System.Collections.Immutable"
+			or "System.Collections.ObjectModel";
 	}
 
 	/// <summary>

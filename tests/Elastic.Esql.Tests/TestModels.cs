@@ -2,6 +2,7 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Collections.Frozen;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Elastic.Esql.Tests.TypeMapping.Escaping;
@@ -15,6 +16,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(SetTaggedProduct))]
+[JsonSerializable(typeof(FrozenTaggedProduct))]
 [JsonSerializable(typeof(InterfaceTaggedProduct))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
@@ -138,6 +140,14 @@ public class TaggedProduct
 public class SetTaggedProduct
 {
 	public HashSet<string> Tags { get; set; } = [];
+}
+
+/// <summary>Document whose tags are a frozen set: the base library keeps it in a namespace of its own.</summary>
+public class FrozenTaggedProduct
+{
+#pragma warning disable IDE0301 // [] builds a FrozenSet only from .NET 9 on, and the tests run on .NET 8 as well
+	public FrozenSet<string> Tags { get; set; } = FrozenSet<string>.Empty;
+#pragma warning restore IDE0301
 }
 
 /// <summary>Document whose tags are typed as an interface, which says nothing about the collection.</summary>
