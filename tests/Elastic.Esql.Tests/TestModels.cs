@@ -3,6 +3,8 @@
 // See the LICENSE file in the project root for more information
 
 using System.Collections.Frozen;
+using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Elastic.Esql.Tests.TypeMapping.Escaping;
@@ -17,9 +19,13 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(FrozenTaggedProduct))]
+[JsonSerializable(typeof(ImmutableTaggedProduct))]
+[JsonSerializable(typeof(CollectionTaggedProduct))]
 [JsonSerializable(typeof(InterfaceTaggedProduct))]
 [JsonSerializable(typeof(TypedValuesProduct))]
 [JsonSerializable(typeof(LinkedProduct))]
+[JsonSerializable(typeof(LabeledProduct))]
+[JsonSerializable(typeof(ArchivedLinesProduct))]
 [JsonSerializable(typeof(TreeNode))]
 [JsonSerializable(typeof(OptionalDocument))]
 [JsonSerializable(typeof(OptionalCountProjection))]
@@ -152,6 +158,18 @@ public class FrozenTaggedProduct
 #pragma warning restore IDE0301
 }
 
+/// <summary>Document whose tags are an immutable array, from the base library's immutable collections.</summary>
+public class ImmutableTaggedProduct
+{
+	public ImmutableArray<string> Tags { get; set; } = [];
+}
+
+/// <summary>Document whose tags are a Collection, from the base library's object model.</summary>
+public class CollectionTaggedProduct
+{
+	public Collection<string> Tags { get; set; } = [];
+}
+
 /// <summary>Document whose tags are typed as an interface, which says nothing about the collection.</summary>
 public class InterfaceTaggedProduct
 {
@@ -179,6 +197,30 @@ public class TypedValuesProduct
 public class LinkedProduct
 {
 	public List<Uri> Links { get; set; } = [];
+}
+
+/// <summary>Document whose labels are dictionaries, each of them one object in the mapping.</summary>
+public class LabeledProduct
+{
+	public List<Dictionary<string, string>> Labels { get; set; } = [];
+}
+
+/// <summary>
+/// Document whose lines the serializer never writes, so that it has no contract for their type:
+/// nothing else in the mapping context refers to <see cref="ArchivedLine"/>.
+/// </summary>
+public class ArchivedLinesProduct
+{
+	public string Name { get; set; } = string.Empty;
+
+	[JsonIgnore]
+	public List<ArchivedLine> Lines { get; set; } = [];
+}
+
+/// <summary>A line held only by an ignored property.</summary>
+public class ArchivedLine
+{
+	public string Sku { get; set; } = string.Empty;
 }
 
 /// <summary>Enum written by name wherever it appears, through the converter on the type.</summary>

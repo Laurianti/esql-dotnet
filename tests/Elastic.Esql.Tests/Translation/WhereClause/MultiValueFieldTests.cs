@@ -321,6 +321,36 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_ContainsOverAnImmutableArray_TranslatesToMatch()
+	{
+		var esql = CreateQuery<ImmutableTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_ContainsOverACollection_TranslatesToMatch()
+	{
+		var esql = CreateQuery<CollectionTaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_ContainsOverAnInterfaceTypedField_TranslatesToMatch()
 	{
 		var esql = CreateQuery<InterfaceTaggedProduct>()
@@ -475,6 +505,22 @@ public class MultiValueFieldTests : EsqlTestBase
 			"""
             FROM products
             | WHERE (ratings IS NOT NULL AND MV_MIN(ratings) < 3)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllWithAnOrderingAtMost_TranslatesToMvMax()
+	{
+		// every value is at most 4 when the largest is
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Ratings.All(r => r <= 4))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (ratings IS NULL OR MV_MAX(ratings) <= 4)
             """.NativeLineEndings());
 	}
 
@@ -989,6 +1035,33 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyOverAListOfDictionaries_ThrowsNotSupported()
+	{
+		// a dictionary is one object in the mapping, as a class is
+		var query = CreateQuery<LabeledProduct>()
+			.From("products")
+			.Where(p => p.Labels.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*collection of objects*");
+	}
+
+	[Test]
+	public void Where_AnyOverAListWithoutASerializerContract_ThrowsNotSupported()
+	{
+		// the serializer never writes the ignored lines and has no contract for their type, so
+		// the element is judged by its shape, a class
+		var query = CreateQuery<ArchivedLinesProduct>()
+			.From("orders")
+			.Where(o => o.Lines.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*collection of objects*");
+	}
+
+	[Test]
 	public void Where_AnyOverADictionary_IsNotTranslated()
 	{
 		// a dictionary is one object in the mapping, not a field holding values
@@ -1218,6 +1291,26 @@ public class MultiValueFieldTests : EsqlTestBase
             FROM products
             | WHERE (grades IS NOT NULL AND MATCH(grades, "High"))
             """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithACapturedEnum_ParameterizesItAsTheSerializerWritesIt()
+	{
+		// the captured enum keeps its name as a parameter, and its value is written by name
+		var grade = Grade.High;
+
+		var query = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Any(g => g == grade));
+
+		var esql = query.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (grades IS NOT NULL AND MATCH(grades, ?grade))
+            """.NativeLineEndings());
+		_ = query.GetParameters()!.Parameters["grade"].GetString().Should().Be("High");
 	}
 
 	[Test]
