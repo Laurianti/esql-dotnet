@@ -822,7 +822,34 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*p.Tags.Where*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*p.Tags.Where*LINQ operator over its values*");
+	}
+
+	[Test]
+	public void Where_AnyOverAProjectedCollection_ThrowsNotSupported()
+	{
+		// after Select(p => p.Categories) the row is the collection, with no field name of its own
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Select(p => p.Categories)
+			.Where(categories => categories.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*projected row*");
+	}
+
+	[Test]
+	public void Where_AnyStartingWithAField_ThrowsNotSupported()
+	{
+		// the test holds for one value at a time, whatever the value it is given
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(p.Name, StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values of tags*");
 	}
 
 	[Test]
@@ -861,6 +888,20 @@ public class MultiValueFieldTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*JsonConverter*");
+	}
+
+	[Test]
+	public void Where_AnyWithoutPredicateOverAPropertyWithAJsonConverter_ThrowsNotSupported()
+	{
+		// a converter need not write one value per element, so even whether the field holds
+		// any does not follow from the collection
+		var query = CreateQuery<ConvertedTagsProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*one value per element*");
 	}
 
 	[Test]

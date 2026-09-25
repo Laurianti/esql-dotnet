@@ -1425,6 +1425,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is null)
 			return false;
 
+		ThrowIfNotAField(node.Method.Name, source);
 		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
 		var name = ResolveMultiValueField(source);
 
@@ -1502,6 +1503,32 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// Refuses a source that reads a field without being one: a LINQ operator over its values,
+	/// such as <c>p.Tags.Where(t => t != "")</c>, or a row that a Select made the collection itself.
+	/// </summary>
+	private static void ThrowIfNotAField(string methodName, Expression source)
+	{
+		switch (source.UnwrapConvertExpressions())
+		{
+			case MemberExpression:
+				return;
+
+			case MethodCallExpression call when call.Method.Name == "MultiField" && call.Method.DeclaringType == typeof(GeneralPurposeExtensions):
+				return;
+
+			case ParameterExpression:
+				throw new NotSupportedException(
+					$"{methodName} over a projected row is not supported: the row is the collection itself, with no field "
+					+ "name to test. Project the collection into a member, as in Select(p => new { p.Tags }).");
+
+			default:
+				throw new NotSupportedException(
+					$"{methodName} over {source} is not supported: a field is tested as a whole, as it is stored, and a "
+					+ "LINQ operator over its values would need them read one at a time.");
+		}
+	}
+
+	/// <summary>
 	/// Refuses a field whose values the translation cannot compare with a value: a collection
 	/// of objects, and a collection written through a JsonConverter.
 	/// </summary>
@@ -1527,8 +1554,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			throw new NotSupportedException(
 				$"{methodName} over a collection written through a JsonConverter is not supported: the "
-				+ "field holds what the converter writes, and the values compared are emitted as given, "
-				+ "so the two need not match.");
+				+ "field holds what the converter writes, which need not be one value per element, so neither "
+				+ "the values compared nor whether the field holds any follow from the collection.");
 		}
 	}
 
@@ -1721,14 +1748,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, string field, bool negated)
 	{
 		// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
-		// StringComparison: either way the test holds for one value at a time
+		// StringComparison and whatever the value: either way the test holds for one value at a time
 		if (call.Object == element
 			&& call.Method.DeclaringType == typeof(string)
 			&& (call.Arguments.Count == 1
 				|| (call.Arguments.Count == 2 && call.Arguments[1].Type == typeof(StringComparison))))
 		{
-			if (!TryGetTextPredicateKind(call.Method.Name, out var kind)
-				|| !TryGetConstant(call.Arguments[0], out _))
+			if (!TryGetTextPredicateKind(call.Method.Name, out var kind))
 				return null;
 
 			return new ElementPredicate(kind, [call.Arguments[0]], Negated: negated);
