@@ -173,6 +173,8 @@ Any property typed as an `IEnumerable<T>` is accepted, a set and an interface in
 
 The value the elements are compared with is rendered as in any other predicate: a captured variable inline or as a parameter, `DateTime.UtcNow.AddDays(-7)` as `NOW() - 7 days`, and an enum as the serializer writes it, by name or by number. A comparison with another field is refused, and so is one with null, which Elasticsearch does not store among the values.
 
+A predicate compared with `true` or `false` is written as the predicate or its negation, so `p.Tags.Any() == false` becomes `NOT tags IS NOT NULL`: Elasticsearch takes neither `MATCH` nor `IS NOT NULL` as an operand of a comparison. A comparison with a boolean known only when the query runs is refused.
+
 On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
 
 Elasticsearch does not allow `MATCH` after `LIMIT`, `STATS` or `FORK`, so a predicate that translates to it is refused after `Take`, `GroupBy` or `Fork` when the query is translated, rather than failing when it runs. Put the `Where` before them; `MV_CONTAINS` and `MV_INTERSECTS` lift this as well once they are generally available.

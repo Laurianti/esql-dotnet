@@ -77,6 +77,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (TryVisitStringComparison(node))
 			return node;
 
+		if (TryVisitMultiValueComparison(node))
+			return node;
+
 		if (node.NodeType is ExpressionType.Equal or ExpressionType.NotEqual)
 		{
 			var nullOp = node.NodeType == ExpressionType.Equal ? "IS NULL" : "IS NOT NULL";
@@ -1431,6 +1434,39 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return node.Method.Name == "Contains"
 			? TryVisitFieldContains(node, source)
 			: TryVisitQuantifier(node, source);
+	}
+
+	/// <summary>
+	/// A predicate over a multi-value field compared with a boolean, <c>p.Tags.Any() == false</c>.
+	/// Elasticsearch takes neither MATCH nor a bare IS NOT NULL as an operand of a comparison, so
+	/// a boolean known when the query is translated picks the predicate or its negation, and one
+	/// known only when the query runs is refused.
+	/// </summary>
+	private bool TryVisitMultiValueComparison(BinaryExpression node)
+	{
+		if (node.NodeType is not (ExpressionType.Equal or ExpressionType.NotEqual))
+			return false;
+
+		var left = node.Left.UnwrapConvertExpressions();
+		var right = node.Right.UnwrapConvertExpressions();
+		var predicate = left is MethodCallExpression leftCall && TryGetMultiValueSource(leftCall) is not null ? leftCall
+			: right is MethodCallExpression rightCall && TryGetMultiValueSource(rightCall) is not null ? rightCall
+			: null;
+
+		if (predicate is null)
+			return false;
+
+		if (!TryGetConstant(predicate == left ? right : left, out var value) || value is not bool flag)
+		{
+			throw new NotSupportedException(
+				$"Comparing {predicate.Method.Name} over {ResolveMultiValueField(TryGetMultiValueSource(predicate)!)} with a boolean "
+				+ "known only when the query runs is not supported: Elasticsearch takes neither MATCH nor IS NOT NULL as an "
+				+ "operand of a comparison. Compare with true or false, or write the predicate, negated with ! where needed.");
+		}
+
+		// "p.Tags.Any() == false" is "!p.Tags.Any()"
+		_ = Visit(flag == (node.NodeType == ExpressionType.Equal) ? predicate : Expression.Not(predicate));
+		return true;
 	}
 
 	/// <summary>

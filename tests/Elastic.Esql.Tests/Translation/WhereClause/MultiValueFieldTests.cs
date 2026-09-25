@@ -81,6 +81,73 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyComparedWithFalse_TranslatesToItsNegation()
+	{
+		// Elasticsearch cannot parse "tags IS NOT NULL == false"
+#pragma warning disable IDE0100 // the comparison with a boolean is the shape under test
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any() == false)
+			.ToString();
+#pragma warning restore IDE0100
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT tags IS NOT NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_ContainsComparedWithTrue_TranslatesToThePredicate()
+	{
+		// MATCH cannot be an operand of ==, so the comparison is left out
+#pragma warning disable IDE0100 // the comparison with a boolean is the shape under test
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains("iot") == true)
+			.ToString();
+#pragma warning restore IDE0100
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND MATCH(tags, "iot"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TrueNotEqualToContains_TranslatesToItsNegation()
+	{
+		// the predicate may sit on either side of the comparison
+#pragma warning disable IDE0100 // the comparison with a boolean is the shape under test
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => true != p.Tags.Contains("iot"))
+			.ToString();
+#pragma warning restore IDE0100
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT (tags IS NOT NULL AND MATCH(tags, "iot"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyComparedWithABooleanOfTheDocument_ThrowsNotSupported()
+	{
+		// a boolean known only when the query runs cannot pick the predicate or its negation
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any() == (p.Name.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean*");
+	}
+
+	[Test]
 	public void Where_AnyOnAListProperty_TranslatesToMatch()
 	{
 		var esql = CreateQuery<TaggedProduct>()
