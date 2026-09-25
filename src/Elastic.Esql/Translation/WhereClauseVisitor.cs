@@ -1399,10 +1399,35 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private bool TryVisitMultiValueField(MethodCallExpression node)
 	{
-		var methodName = node.Method.Name;
-
-		if (methodName is not ("Any" or "All" or "Contains"))
+		var source = TryGetMultiValueSource(node);
+		if (source is null)
 			return false;
+
+		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
+
+		// field.Any() with no predicate: the field simply has to hold a value
+		if (node.Method.Name == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
+		{
+			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
+			// array is stored as a missing field, so IS NOT NULL is the same test, and one
+			// Lucene answers as an exists query
+			_ = _builder.Append(ResolveMultiValueField(source)).Append(" IS NOT NULL");
+			return true;
+		}
+
+		return node.Method.Name == "Contains"
+			? TryVisitFieldContains(node, source)
+			: TryVisitQuantifier(node, source);
+	}
+
+	/// <summary>
+	/// The field an Any, All or Contains of the framework's own is called on, or null when the
+	/// call is none of those or its source is not a field of the document.
+	/// </summary>
+	private static Expression? TryGetMultiValueSource(MethodCallExpression node)
+	{
+		if (node.Method.Name is not ("Any" or "All" or "Contains"))
+			return null;
 
 		// the source must be a document field, not a constant collection
 		var source = node.Method.IsStatic
@@ -1413,14 +1438,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is not null && node.Method.DeclaringType == typeof(MemoryExtensions))
 			source = TryUnwrapMemoryExtensionsSource(source);
 
-		if (source is null || !IsMultiValueField(source))
-			return false;
-
 		// only the framework's own Any, All and Contains: a method of that name defined
 		// elsewhere may mean anything, and is left to fail soft as before
-		if (!IsFrameworkMethod(node.Method))
-			return false;
+		return source is not null && IsMultiValueField(source) && IsFrameworkMethod(node.Method)
+			? source
+			: null;
+	}
 
+	/// <summary>
+	/// Refuses a field whose values the translation cannot compare with a value: a collection
+	/// of objects, and a collection written through a JsonConverter.
+	/// </summary>
+	private void ThrowIfTheValuesCannotBeCompared(string methodName, Expression source)
+	{
 		// A collection of objects is an object in the mapping: ES|QL has a column for each
 		// of its fields and none for the objects themselves, so there is nothing to count
 		// or to compare a value with.
@@ -1444,40 +1474,37 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ "field holds what the converter writes, and the values compared are emitted as given, "
 				+ "so the two need not match.");
 		}
+	}
 
-		// field.Any() with no predicate: the field simply has to hold a value
-		if (methodName == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
-		{
-			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
-			// array is stored as a missing field, so IS NOT NULL is the same test, and one
-			// Lucene answers as an exists query
-			_ = _builder.Append(ResolveMultiValueField(source)).Append(" IS NOT NULL");
-			return true;
-		}
+	/// <summary>
+	/// <c>field.Contains(value)</c>, which is <c>field.Any(x =&gt; x == value)</c> and is
+	/// answered as that, and only that overload: one taking a comparer asks for a comparison
+	/// the translation cannot honour.
+	/// </summary>
+	private bool TryVisitFieldContains(MethodCallExpression node, Expression source)
+	{
+		if (TakesAnEqualityComparer(node))
+			throw ContainsWithAnEqualityComparer();
 
-		// field.Contains(value), and only that overload: one taking a comparer asks
-		// for a comparison the translation cannot honour
-		if (methodName == "Contains")
-		{
-			if (TakesAnEqualityComparer(node))
-				throw ContainsWithAnEqualityComparer();
+		if (node.Arguments.Count != (node.Method.IsStatic ? 2 : 1))
+			return false;
 
-			var expectedArguments = node.Method.IsStatic ? 2 : 1;
+		var compared = TryGetComparedValue(node.Arguments[^1], ElementType(source.Type), ResolveMultiValueField(source));
 
-			return node.Arguments.Count == expectedArguments
-				&& TryAppendMatch(source, node.Arguments[^1]);
-		}
+		return compared is not null
+			&& TryAppendQuantified(source, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
+	}
 
-		var argument = node.Arguments[^1];
-
-		if (StripQuotes(argument) is not LambdaExpression { Parameters.Count: 1 } lambda)
+	/// <summary><c>field.Any(predicate)</c> and <c>field.All(predicate)</c>, over one predicate on the element.</summary>
+	private bool TryVisitQuantifier(MethodCallExpression node, Expression source)
+	{
+		if (StripQuotes(node.Arguments[^1]) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
 
 		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], ResolveMultiValueField(source), negated: false);
-		if (predicate is null)
-			return false;
 
-		return TryAppendQuantified(source, all: methodName == "All", predicate.Value);
+		return predicate is not null
+			&& TryAppendQuantified(source, all: node.Method.Name == "All", predicate.Value);
 	}
 
 	/// <summary>
@@ -1685,75 +1712,22 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			_ = _builder.Append("NOT ");
 			all = !all;
-			predicate = predicate with { Negated = false };
 		}
 
 		switch (predicate.Kind)
 		{
-			// a document matches MATCH when any of the field's values does
-			case ElementPredicateKind.Equal when !all:
-				AppendPresentMatches(name, [RenderValue(predicate, 0)]);
-				return true;
-
-			case ElementPredicateKind.In when !all:
-				if (predicate.Values.Count == 0)
-				{
-					_ = _builder.Append("false");
-					return true;
-				}
-
-				// each value adds one level to the expression
-				if (predicate.Values.Count > MaxMatchedValues)
-				{
-					throw new NotSupportedException(
-						$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
-						+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
-				}
-
-				AppendPresentMatches(name, [.. Enumerable.Range(0, predicate.Values.Count).Select(i => RenderValue(predicate, i))]);
-				return true;
-
-			// every value equals v: the field holds one distinct value, and it matches.
-			// A missing field has no value that differs, as All() over an empty sequence is true.
 			case ElementPredicateKind.Equal:
-				_ = _builder.Append('(').Append(name).Append(" IS NULL OR (MV_COUNT(MV_DEDUPE(").Append(name).Append(")) == 1 AND ");
-				AppendMatch(name, RenderValue(predicate, 0));
-				_ = _builder.Append("))");
+				AppendEquality(name, all, predicate);
 				return true;
 
-			// some value is above v when the largest is; every value is when the smallest is
+			case ElementPredicateKind.In:
+				AppendMembership(name, all, predicate);
+				return true;
+
 			case ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual
 				or ElementPredicateKind.LessThan or ElementPredicateKind.LessThanOrEqual:
-				{
-					var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
-					var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
-					var op = predicate.Kind switch
-					{
-						ElementPredicateKind.GreaterThan => ">",
-						ElementPredicateKind.GreaterThanOrEqual => ">=",
-						ElementPredicateKind.LessThan => "<",
-						_ => "<="
-					};
-
-					// MV_MIN and MV_MAX are null over a missing field, and so would be the
-					// whole predicate, which then answers neither true nor false. A missing
-					// field is an empty sequence: All holds over it and Any does not, and
-					// saying so explicitly keeps an enclosing NOT meaningful.
-					_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
-
-					_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
-						.Append(RenderValue(predicate, 0)).Append(')');
-
-					return true;
-				}
-
-			// "every value is one of these", which "some value is not" negates, has no answer
-			// over the field as a whole: MATCH answers whether some value is
-			case ElementPredicateKind.In:
-				throw new NotSupportedException(
-					$"A membership test that every value of {name} must pass, or that some value must fail, is not "
-					+ "supported: MATCH answers whether some value is one of the given values, not whether every "
-					+ "value is. Test with Any, and negate the Any itself to ask that no value is one of them.");
+				AppendOrdering(name, all, predicate);
+				return true;
 
 			// StartsWith and the rest test one value at a time, which needs the field read
 			// position by position: the shape is refused rather than answered by a test that
@@ -1763,13 +1737,77 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 	}
 
-	/// <summary><c>field.Contains(value)</c>, which is <c>field.Any(x =&gt; x == value)</c> and is answered as that.</summary>
-	private bool TryAppendMatch(Expression field, Expression value)
+	/// <summary>Any and All over equality with one value.</summary>
+	private void AppendEquality(string name, bool all, ElementPredicate predicate)
 	{
-		var compared = TryGetComparedValue(value, ElementType(field.Type), ResolveMultiValueField(field));
+		// a document matches MATCH when any of the field's values does
+		if (!all)
+		{
+			AppendPresentMatches(name, [RenderValue(predicate, 0)]);
+			return;
+		}
 
-		return compared is not null
-			&& TryAppendQuantified(field, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
+		// every value equals v: the field holds one distinct value, and it matches.
+		// A missing field has no value that differs, as All() over an empty sequence is true.
+		_ = _builder.Append('(').Append(name).Append(" IS NULL OR (MV_COUNT(MV_DEDUPE(").Append(name).Append(")) == 1 AND ");
+		AppendMatch(name, RenderValue(predicate, 0));
+		_ = _builder.Append("))");
+	}
+
+	/// <summary>Any over membership in a captured collection, with a MATCH for each of its values.</summary>
+	private void AppendMembership(string name, bool all, ElementPredicate predicate)
+	{
+		// "every value is one of these", which "some value is not" negates, has no answer
+		// over the field as a whole: MATCH answers whether some value is
+		if (all)
+		{
+			throw new NotSupportedException(
+				$"A membership test that every value of {name} must pass, or that some value must fail, is not "
+				+ "supported: MATCH answers whether some value is one of the given values, not whether every "
+				+ "value is. Test with Any, and negate the Any itself to ask that no value is one of them.");
+		}
+
+		if (predicate.Values.Count == 0)
+		{
+			_ = _builder.Append("false");
+			return;
+		}
+
+		// each value adds one level to the expression
+		if (predicate.Values.Count > MaxMatchedValues)
+		{
+			throw new NotSupportedException(
+				$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
+				+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
+		}
+
+		AppendPresentMatches(name, [.. Enumerable.Range(0, predicate.Values.Count).Select(i => RenderValue(predicate, i))]);
+	}
+
+	/// <summary>
+	/// Any and All over an ordering: some value is above v when the largest is, and every
+	/// value is when the smallest is.
+	/// </summary>
+	private void AppendOrdering(string name, bool all, ElementPredicate predicate)
+	{
+		var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
+		var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
+		var op = predicate.Kind switch
+		{
+			ElementPredicateKind.GreaterThan => ">",
+			ElementPredicateKind.GreaterThanOrEqual => ">=",
+			ElementPredicateKind.LessThan => "<",
+			_ => "<="
+		};
+
+		// MV_MIN and MV_MAX are null over a missing field, and so would be the
+		// whole predicate, which then answers neither true nor false. A missing
+		// field is an empty sequence: All holds over it and Any does not, and
+		// saying so explicitly keeps an enclosing NOT meaningful.
+		_ = _builder.Append('(').Append(name).Append(all ? " IS NULL OR " : " IS NOT NULL AND ");
+
+		_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
+			.Append(RenderValue(predicate, 0)).Append(')');
 	}
 
 	/// <summary>
