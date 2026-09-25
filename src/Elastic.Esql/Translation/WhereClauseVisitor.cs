@@ -1044,14 +1044,22 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return finder.Found;
 	}
 
-	/// <summary>Finds the lambda parameter anywhere in an expression.</summary>
-	private sealed class ParameterFinder : ExpressionVisitor
+	/// <summary>Whether the expression reads the element of an Any or All, anywhere in it.</summary>
+	private static bool ReadsTheElement(Expression expression, ParameterExpression element)
+	{
+		var finder = new ParameterFinder(element);
+		_ = finder.Visit(expression);
+		return finder.Found;
+	}
+
+	/// <summary>Finds the lambda parameter anywhere in an expression, or the one given.</summary>
+	private sealed class ParameterFinder(ParameterExpression? parameter = null) : ExpressionVisitor
 	{
 		public bool Found { get; private set; }
 
 		protected override Expression VisitParameter(ParameterExpression node)
 		{
-			Found = true;
+			Found |= parameter is null || node == parameter;
 			return base.VisitParameter(node);
 		}
 	}
@@ -1453,7 +1461,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (StripQuotes(argument) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
 
-		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], negated: false);
+		var predicate = TryParseElementPredicate(lambda.Body, lambda.Parameters[0], ResolveMultiValueField(source), negated: false);
 		if (predicate is null)
 			return false;
 
@@ -1464,33 +1472,36 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// Reads the body of the lambda passed to Any/All as one predicate on the element.
 	/// Null guards on the element are dropped, since a stored value is never null.
 	/// </summary>
-	private ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, bool negated) =>
+	private ElementPredicate? TryParseElementPredicate(Expression body, ParameterExpression element, string field, bool negated) =>
 		body switch
 		{
 			UnaryExpression { NodeType: ExpressionType.Not } negation =>
-				TryParseElementPredicate(negation.Operand, element, negated: !negated),
+				TryParseElementPredicate(negation.Operand, element, field, negated: !negated),
 
 			// "x != null && P(x)" is P(x)
 			BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Left, element, ExpressionType.NotEqual) =>
-				TryParseElementPredicate(conjunction.Right, element, negated: negated),
+				TryParseElementPredicate(conjunction.Right, element, field, negated: negated),
 
 			BinaryExpression { NodeType: ExpressionType.AndAlso } conjunction when IsNullGuard(conjunction.Right, element, ExpressionType.NotEqual) =>
-				TryParseElementPredicate(conjunction.Left, element, negated: negated),
+				TryParseElementPredicate(conjunction.Left, element, field, negated: negated),
 
 			// "x == null || P(x)" is P(x)
 			BinaryExpression { NodeType: ExpressionType.OrElse } disjunction when IsNullGuard(disjunction.Left, element, ExpressionType.Equal) =>
-				TryParseElementPredicate(disjunction.Right, element, negated: negated),
+				TryParseElementPredicate(disjunction.Right, element, field, negated: negated),
+
+			// Any(a || b) is Any(a) || Any(b), which the caller can write
+			BinaryExpression { NodeType: ExpressionType.OrElse } => throw OrInsideThePredicate(field),
 
 			BinaryExpression { NodeType: ExpressionType.Equal or ExpressionType.NotEqual } comparison =>
-				TryParseElementEquality(comparison, element, negated: negated),
+				TryParseElementEquality(comparison, element, field, negated: negated),
 
 			BinaryExpression
 			{
 				NodeType: ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
 					or ExpressionType.LessThan or ExpressionType.LessThanOrEqual
-			} ordering => TryParseElementOrdering(ordering, element, negated: negated),
+			} ordering => TryParseElementOrdering(ordering, element, field, negated: negated),
 
-			MethodCallExpression call => TryParseElementCall(call, element, negated: negated),
+			MethodCallExpression call => TryParseElementCall(call, element, field, negated: negated),
 
 			_ => null
 		};
@@ -1500,13 +1511,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// short or a byte as an int, and an int with a double as a double, so the element may sit
 	/// inside a conversion.
 	/// </summary>
-	private ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, bool negated)
+	private ElementPredicate? TryParseElementEquality(BinaryExpression comparison, ParameterExpression element, string field, bool negated)
 	{
-		var value = comparison.Left.UnwrapConvertExpressions() == element ? comparison.Right
-			: comparison.Right.UnwrapConvertExpressions() == element ? comparison.Left
-			: null;
-
-		var compared = value is null ? null : TryGetComparedValue(value, element);
+		var value = TryGetComparand(comparison, element, field, out _);
+		var compared = value is null ? null : TryGetComparedValue(value, element, field);
 		if (compared is null)
 			return null;
 
@@ -1518,13 +1526,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <c>x &gt; v</c> and the other orderings, with the element on either side, inside a
 	/// conversion as for equality.
 	/// </summary>
-	private ElementPredicate? TryParseElementOrdering(BinaryExpression ordering, ParameterExpression element, bool negated)
+	private ElementPredicate? TryParseElementOrdering(BinaryExpression ordering, ParameterExpression element, string field, bool negated)
 	{
 		// "10 < x" is "x > 10": keep the element on the left
-		var elementOnLeft = ordering.Left.UnwrapConvertExpressions() == element;
-		var value = elementOnLeft ? ordering.Right : ordering.Right.UnwrapConvertExpressions() == element ? ordering.Left : null;
-
-		var compared = value is null ? null : TryGetComparedValue(value, element);
+		var value = TryGetComparand(ordering, element, field, out var elementOnLeft);
+		var compared = value is null ? null : TryGetComparedValue(value, element, field);
 		if (compared is null)
 			return null;
 
@@ -1540,15 +1546,36 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// The side of a comparison the element is compared with, the element sitting on the other
+	/// side. A comparison that reads the element through a function, such as
+	/// <c>t.Length &gt; 3</c>, holds for one value at a time and is refused.
+	/// </summary>
+	private static Expression? TryGetComparand(BinaryExpression comparison, ParameterExpression element, string field, out bool elementOnLeft)
+	{
+		elementOnLeft = comparison.Left.UnwrapConvertExpressions() == element;
+
+		var value = elementOnLeft ? comparison.Right
+			: comparison.Right.UnwrapConvertExpressions() == element ? comparison.Left
+			: null;
+
+		if (ReadsTheElement(value ?? comparison, element))
+			throw PredicateOverIndividualValues(field);
+
+		return value;
+	}
+
+	/// <summary>
 	/// The value an element is compared with, as the expression to render, which is rendered
 	/// as a scalar comparison renders it, a date computed from DateTime.UtcNow included. A
-	/// value that reads a field, of the element or of the document, is none, and neither is
-	/// null, which a stored value never is.
+	/// value that reads another field is refused, and so is null, which a stored value never is.
 	/// </summary>
-	private Expression? TryGetComparedValue(Expression value, ParameterExpression element)
+	private Expression? TryGetComparedValue(Expression value, ParameterExpression element, string field)
 	{
-		if (ReadsAField(value) || ResolvesToNull(value))
-			return null;
+		if (ReadsAField(value))
+			throw ComparisonWithAnotherField(field);
+
+		if (ResolvesToNull(value))
+			throw ComparisonWithNull(field);
 
 		var enumType = Nullable.GetUnderlyingType(element.Type) ?? element.Type;
 		if (!enumType.IsEnum)
@@ -1565,11 +1592,29 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			: null;
 	}
 
+	private static NotSupportedException ComparisonWithAnotherField(string field) => new(
+		$"Comparing the values of {field} with another field is not supported: they are compared with a "
+		+ "value the query carries, such as a literal or a captured variable.");
+
+	private static NotSupportedException ComparisonWithNull(string field) => new(
+		$"Comparing the values of {field} with null is not supported: Elasticsearch stores no null among "
+		+ "the values of a field, and MATCH does not take one.");
+
+	private static NotSupportedException OrInsideThePredicate(string field) => new(
+		$"An OR inside the predicate over {field} is not supported: write Any(v => a || b) as "
+		+ "Any(v => a) || Any(v => b), and an OR of equalities as membership, Any(v => values.Contains(v)).");
+
+	private static NotSupportedException PredicateOverIndividualValues(string field) => new(
+		$"A predicate over the individual values of {field} is not supported: MATCH, MV_MIN, "
+		+ "MV_MAX and MV_COUNT answer a test over the field as a whole, and a test such as "
+		+ "StartsWith holds for one value at a time. Compare the values with equality, or "
+		+ "test the field with one of the supported comparisons.");
+
 	/// <summary>
 	/// A call on the element, <c>x.StartsWith("a")</c> and the like, or membership of the
 	/// element in a constant collection, <c>values.Contains(x)</c>.
 	/// </summary>
-	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, bool negated)
+	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, string field, bool negated)
 	{
 		// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
 		// StringComparison: either way the test holds for one value at a time
@@ -1609,7 +1654,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		// a stored value is never null, and MATCH(field, null) is not valid ES|QL
 		if (candidates.Any(candidate => candidate is null))
-			return null;
+			throw ComparisonWithNull(field);
 
 		return new ElementPredicate(ElementPredicateKind.In, [.. candidates.Select(Expression.Constant)], Negated: negated);
 	}
@@ -1702,23 +1747,24 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			// position by position: the shape is refused rather than answered by a test that
 			// reads the whole field.
 			default:
-				throw new NotSupportedException(
-					$"A predicate over the individual values of {name} is not supported: MATCH, MV_MIN, "
-					+ "MV_MAX and MV_COUNT answer a test over the field as a whole, and a test such as "
-					+ "StartsWith holds for one value at a time. Compare the values with equality, or "
-					+ "test the field with one of the supported comparisons.");
+				throw PredicateOverIndividualValues(name);
 		}
 	}
 
 	private bool TryAppendMatch(Expression field, Expression value)
 	{
+		var column = ResolveMultiValueField(field);
+
+		if (ReadsAField(value))
+			throw ComparisonWithAnotherField(column);
+
 		if (!TryGetConstant(value, out var constant))
-			return false;
+			return ResolvesToNull(value) ? throw ComparisonWithNull(column) : false;
 
 		var name = CapturedName(value);
 
 		AppendPresentMatches(
-			ResolveMultiValueField(field),
+			column,
 			[name is null ? _context.FormatValue(constant, null) : _context.GetValueOrParameterName(name, constant)]);
 		return true;
 	}

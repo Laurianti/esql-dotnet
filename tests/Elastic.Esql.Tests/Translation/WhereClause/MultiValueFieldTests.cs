@@ -598,7 +598,7 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
 	}
 
 	[Test]
@@ -610,7 +610,58 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Contains*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
+	}
+
+	[Test]
+	public void Where_ContainsWithAnotherField_ThrowsNotSupported()
+	{
+		// MATCH takes a constant, and Elasticsearch rejects a field there
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Contains(p.Name));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with another field*");
+	}
+
+	[Test]
+	public void Where_AnyComparingTheElementWithAnotherField_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == p.Name));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with another field*");
+	}
+
+	[Test]
+	public void Where_AnyWithAnOrOfEqualities_ThrowsNotSupported()
+	{
+		// Any(a || b) is Any(a) || Any(b), which the message says
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t == "iot" || t == "water"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*OR inside the predicate over tags*");
+	}
+
+	[Test]
+	public void Where_AnyOverAFunctionOfTheElement_ThrowsNotSupported()
+	{
+		// the length of each value is a test of one value at a time
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values of tags*");
 	}
 
 	[Test]
@@ -804,7 +855,7 @@ public class MultiValueFieldTests : EsqlTestBase
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Enumerable.Any*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
 	}
 
 	[Test]
