@@ -1986,17 +1986,73 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				AppendOrdering(name, all, predicate);
 				break;
 
-			// StartsWith and the rest hold for one value at a time, which needs the field
-			// read position by position; how many positions is what Take(n) states
+			// some value starts with, ends with or contains a text: a full-text function matches
+			// when any value does, as MATCH does for equality
+			case ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains when !all:
+				AppendQueryString(name, predicate);
+				break;
+
+			// every value passing a text test has no answer over the field as a whole: it needs
+			// the field read position by position, and how many positions is what Take(n) states
 			default:
 				throw new NotSupportedException(
-					$"A predicate over the individual values of {name} is not supported without a "
-					+ "bound: MATCH, MV_MIN, MV_MAX and MV_COUNT answer a test over the field as a "
-					+ "whole, and a test such as StartsWith holds for one value at a time, which "
-					+ "reads the field position by position. State how many with Take(n) on the "
-					+ "field, as in Tags.Take(4).Any(t => t.StartsWith(\"wat\")).");
+					$"A predicate that every value of {name} must pass, or that some value must fail, is not "
+					+ "supported without a bound for a test such as StartsWith, which holds for one value at a "
+					+ "time: QSTR answers whether some value passes it, and every value passing it needs the "
+					+ "field read position by position. State how many with Take(n) on the field, as in "
+					+ "Tags.Take(4).All(t => t.StartsWith(\"wat\")).");
 		}
 	}
+
+	/// <summary>
+	/// Any over StartsWith, EndsWith or Contains, answered with one QSTR: a wildcard query on the
+	/// field matches when any of its values does, so there are no positions and no bound. The
+	/// text is escaped for the query string syntax, and has to be known when the query is
+	/// written, since QSTR takes its query as a literal.
+	/// </summary>
+	private void AppendQueryString(string name, ElementPredicate predicate)
+	{
+		if (!TryGetConstant(predicate.Values[0], out var constant) || constant is not string text)
+		{
+			throw new NotSupportedException(
+				$"A text test over the values of {name} takes a string known when the query is written: "
+				+ "it translates to QSTR, whose query is a literal.");
+		}
+
+		var escaped = EscapeQueryString(text);
+		var pattern = predicate.Kind switch
+		{
+			ElementPredicateKind.StartsWith => escaped + "*",
+			ElementPredicateKind.EndsWith => "*" + escaped,
+			_ => "*" + escaped + "*"
+		};
+
+		// A shard whose index does not map the field answers the query with null rather than
+		// false, as for MATCH, so the field is required to be present
+		ThrowIfACommandBlocksMatch("QSTR");
+		_ = _builder.Append('(').Append(name).Append(" IS NOT NULL AND QSTR(")
+			.Append(EsqlFormatting.FormatString(EscapeQueryString(name, keepDots: true) + ":" + pattern))
+			.Append("))");
+	}
+
+	// Every character the query string syntax reserves, whitespace included, is escaped with a
+	// backslash; the dots of a field path are part of its name
+	private static string EscapeQueryString(string value, bool keepDots = false)
+	{
+		var builder = new StringBuilder(value.Length);
+
+		foreach (var character in value)
+		{
+			if ((QueryStringReserved.Contains(character) || char.IsWhiteSpace(character)) && !(keepDots && character == '.'))
+				_ = builder.Append('\\');
+
+			_ = builder.Append(character);
+		}
+
+		return builder.ToString();
+	}
+
+	private static readonly HashSet<char> QueryStringReserved = [.. "+-=&|><!(){}[]^\"~*?:\\/"];
 
 	/// <summary>Any and All over equality with one value.</summary>
 	private void AppendEquality(string name, bool all, ElementPredicate predicate)
@@ -2266,7 +2322,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// exact primitives, and replace this once they are generally available.
 	private void AppendMatch(string field, string renderedValue)
 	{
-		ThrowIfACommandBlocksMatch();
+		ThrowIfACommandBlocksMatch("MATCH");
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
 	}
 
@@ -2276,7 +2332,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// so the position rule does not apply to them, and nothing is pushed to the index after
 	// those commands anyway. Both are still preview (9.2 and 9.4): the refusal stays until they
 	// are generally available, and this is the place to revisit then.
-	private void ThrowIfACommandBlocksMatch()
+	private void ThrowIfACommandBlocksMatch(string function)
 	{
 		if (_matchPositionChecked)
 			return;
@@ -2287,7 +2343,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (command is not null)
 		{
 			throw new NotSupportedException(
-				$"A predicate on a multi-value field is not supported after {command}: it translates to MATCH, "
+				$"A predicate on a multi-value field is not supported after {command}: it translates to {function}, "
 				+ $"which Elasticsearch does not allow after {command}.");
 		}
 	}

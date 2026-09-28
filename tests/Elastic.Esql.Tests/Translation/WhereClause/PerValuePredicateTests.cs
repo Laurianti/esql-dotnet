@@ -657,7 +657,7 @@ public class PerValuePredicateTests : EsqlTestBase
 	{
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+			.Where(p => p.Tags.All(t => t.StartsWith("wat", StringComparison.Ordinal)));
 
 		var act = () => query.ToString();
 
