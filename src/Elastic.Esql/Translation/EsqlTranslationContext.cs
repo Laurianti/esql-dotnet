@@ -32,6 +32,16 @@ internal sealed class EsqlTranslationContext
 	public bool HasProjected { get; set; }
 
 	/// <summary>
+	/// The context of the pipeline a Fork branch continues. Elasticsearch verifies a branch on
+	/// top of that pipeline, so a rule about the commands before a point holds across the two.
+	/// </summary>
+	public EsqlTranslationContext? Parent { get; set; }
+
+	/// <summary>The commands before this point, those of the parent pipelines first.</summary>
+	public IEnumerable<QueryCommand> CommandsInThePipeline() =>
+		Parent is null ? Commands : Parent.CommandsInThePipeline().Concat(Commands);
+
+	/// <summary>
 	/// Named-parameter accumulator. Settable internally so sub-pipeline visitors (e.g. FORK
 	/// branches) can share the parent's instance and avoid losing parameters at branch boundaries.
 	/// </summary>
@@ -204,7 +214,7 @@ internal sealed class EsqlTranslationContext
 
 	// Only converters the user registered on the options count; the resolver's built-in converters are
 	// exactly what the explicit-decimal fast path stands in for.
-	private bool HasRegisteredConverter(Type type)
+	internal bool HasRegisteredConverter(Type type)
 	{
 		foreach (var converter in SerializerOptions.Converters)
 		{
