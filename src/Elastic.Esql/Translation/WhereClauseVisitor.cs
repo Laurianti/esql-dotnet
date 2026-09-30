@@ -1512,7 +1512,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is null)
 			return false;
 
-		var positions = TryStripTake(ref source);
+		source = StripTake(source, out var take);
+		var positions = take is null ? (int?)null : PositionsTaken(take);
 		ThrowIfNotAField(node.Method.Name, source);
 		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
 		var name = ResolveMultiValueField(source);
@@ -1534,17 +1535,24 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
-	/// The count of <c>field.Take(n)</c>, which bounds the predicate to the first n values of
-	/// the field, with the source moved onto the field itself; null when the source is no Take.
+	/// The field a predicate reads, with <c>field.Take(n)</c> moved onto the field itself and
+	/// handed back in <paramref name="take"/>, unchecked; the source as it is when it is no Take.
 	/// "field.Take(n).Any(p)" means "any of the first n", which is what reading the field
 	/// position by position computes, so the bound belongs to the one predicate that states it.
 	/// </summary>
-	private static int? TryStripTake(ref Expression source)
+	private static Expression StripTake(Expression source, out MethodCallExpression? take)
 	{
-		if (source is not MethodCallExpression { Method.Name: nameof(Enumerable.Take), Arguments.Count: 2 } take
-			|| take.Method.DeclaringType != typeof(Enumerable))
-			return null;
+		take = source is MethodCallExpression { Method.Name: nameof(Enumerable.Take), Arguments.Count: 2 } call
+			&& call.Method.DeclaringType == typeof(Enumerable)
+				? call
+				: null;
 
+		return take?.Arguments[0] ?? source;
+	}
+
+	/// <summary>The count of a <c>field.Take(n)</c>, refused when it is no count Elasticsearch can read.</summary>
+	private static int PositionsTaken(MethodCallExpression take)
+	{
 		// Take(Range) has two arguments as well; by name, since netstandard2.0 has no System.Range
 		if (take.Arguments[1].Type.FullName == "System.Range")
 		{
@@ -1567,7 +1575,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ $"to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
 		}
 
-		source = take.Arguments[0];
 		return count;
 	}
 
@@ -1593,8 +1600,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (!TryGetConstant(predicate == left ? right : left, out var value) || value is not bool flag)
 		{
-			var source = TryGetMultiValueSource(predicate)!;
-			_ = TryStripTake(ref source);
+			// the Take is not checked here: the boolean is what this refusal explains
+			var source = StripTake(TryGetMultiValueSource(predicate)!, out _);
 
 			throw new NotSupportedException(
 				$"Comparing {predicate.Method.Name} over {ResolveMultiValueField(source)} with a boolean "

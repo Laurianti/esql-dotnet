@@ -1065,4 +1065,58 @@ public class PerValuePredicateTests : EsqlTestBase
             | WHERE {{AllOf("tags", value => $"LOCATE({value}, \"at\") > 0", positions: 2)}}
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Where_TakeComparedWithABooleanOfTheDocument_NamesTheField()
+	{
+		// the message names the field, not the Take over it
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any() == (p.Name.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean known only when the query runs*");
+	}
+
+	[Test]
+	public void Where_TakeOfZeroComparedWithABooleanOfTheDocument_ExplainsTheBoolean()
+	{
+		// the comparison with a runtime boolean is what this refusal is for, so it wins over the count
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(0).Any() == (p.Name.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean known only when the query runs*");
+	}
+
+	[Test]
+	public void Where_TakeAboveTheBoundComparedWithABooleanOfTheDocument_ExplainsTheBoolean()
+	{
+		// as for a count of zero
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(257).Any(t => t.StartsWith("wat", StringComparison.Ordinal)) == (p.Name.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean known only when the query runs*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeComparedWithABooleanOfTheDocument_ExplainsTheBoolean()
+	{
+		// as for a count of zero
+		var firstFour = ..4;
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(firstFour).Any() == (p.Name.Length > 3));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean known only when the query runs*");
+	}
 }
