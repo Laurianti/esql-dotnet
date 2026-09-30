@@ -183,11 +183,11 @@ Elasticsearch does not allow `MATCH` after `FORK`, `LIMIT` or `STATS`, so a pred
 
 ```csharp
 .Where(p => p.Tags.Any(t => t.StartsWith("wat")))  // WHERE (tags IS NOT NULL AND QSTR("tags:wat*"))
-.Where(p => p.Tags.Any(t => t.EndsWith("al")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*al"))
-.Where(p => p.Tags.Any(t => t.Contains("at")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*at*"))
+.Where(p => p.Tags.Any(t => t.EndsWith("al")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*al", {"allow_leading_wildcard": true}))
+.Where(p => p.Tags.Any(t => t.Contains("at")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*at*", {"allow_leading_wildcard": true}))
 ```
 
-The text and the field name are escaped for the query string syntax, where a field name is not quoted with backticks, and the text has to be known when the query is written, since `QSTR` takes its query as a literal. `QSTR` is stricter than `MATCH` about where it sits: Elasticsearch allows it only after `FROM`, `WHERE` and `SORT`, so after a `Select`, `Keep`, `Drop`, `Take`, `GroupBy`, `Fork`, `LookupJoin`, `Completion`, or a `RawEsql` fragment with any other command, it is refused when the query is translated. Put the `Where` first. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
+The text and the field name are escaped for the query string syntax, where a field name is not quoted with backticks, and the text has to be known when the query is written, since `QSTR` takes its query as a literal. `QSTR` is stricter than `MATCH` about where it sits: Elasticsearch allows it only after `FROM`, `WHERE` and `SORT`, so after a `Select`, `Keep`, `Drop`, `Take`, `GroupBy`, `Fork`, `LookupJoin`, `Completion`, or a `RawEsql` fragment with any other command, it is refused when the query is translated. Put the `Where` first. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one, and is written with the `allow_leading_wildcard` option, so a cluster that disallows leading wildcards in query strings (`indices.query.query_string.allowLeadingWildcard: false`) still runs the query. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
 
 `All` over such a test, or `Any` over its negation, has no answer over the field as a whole: `QSTR` answers whether some value passes it, not whether every value does. It needs the field read position by position. How many positions to read is stated with `Take(n)` on the field, which already means "the first n" in LINQ. Each position is read with `MV_SLICE` and tested on its own:
 

@@ -2059,8 +2059,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// false, as for MATCH, so the field is required to be present
 		ThrowIfACommandBlocksFullText("QSTR");
 		_ = _builder.Append('(').Append(name).Append(" IS NOT NULL AND QSTR(")
-			.Append(EsqlFormatting.FormatString(QueryStringFieldName(name) + ":" + pattern))
-			.Append("))");
+			.Append(EsqlFormatting.FormatString(QueryStringFieldName(name) + ":" + pattern));
+
+		// EndsWith and Contains lead with a wildcard, which a cluster may disallow in query strings
+		// (indices.query.query_string.allowLeadingWildcard) and would refuse only when the query runs:
+		// the option allows it for this query. QSTR takes options from 9.1, where it is generally available.
+		if (predicate.Kind is not ElementPredicateKind.StartsWith)
+			_ = _builder.Append(", {\"allow_leading_wildcard\": true}");
+
+		_ = _builder.Append("))");
 	}
 
 	/// <summary>

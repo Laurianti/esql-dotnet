@@ -310,7 +310,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:*wat"))
+            | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:*wat", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -325,7 +325,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:*wat*"))
+            | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:*wat*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -355,7 +355,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*l"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*l", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -370,7 +370,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -385,7 +385,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -415,7 +415,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -433,7 +433,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -461,7 +461,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -689,6 +689,31 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take(n)*");
+	}
+
+	[Test]
+	public void Where_AnyEndsWith_AllowsTheLeadingWildcardItNeeds()
+	{
+		// a cluster may disallow leading wildcards in query strings, which would fail the query
+		// only when it runs; the option allows it for this one query whatever the node setting
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.EndsWith("al", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Contain("""QSTR("tags:*al", {"allow_leading_wildcard": true})""");
+	}
+
+	[Test]
+	public void Where_AnyStartsWith_NeedsNoOption()
+	{
+		// the wildcard trails, which every cluster allows
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Contain("""QSTR("tags:wat*"))""");
 	}
 
 	[Test]

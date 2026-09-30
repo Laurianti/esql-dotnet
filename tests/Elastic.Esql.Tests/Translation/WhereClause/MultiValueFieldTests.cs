@@ -478,7 +478,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*al"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*al", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
@@ -494,7 +494,7 @@ public class MultiValueFieldTests : EsqlTestBase
 		_ = esql.Should().Be(
 			"""
             FROM products
-            | WHERE (tags IS NOT NULL AND QSTR("tags:*at*"))
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*at*", {"allow_leading_wildcard": true}))
             """.NativeLineEndings());
 	}
 
