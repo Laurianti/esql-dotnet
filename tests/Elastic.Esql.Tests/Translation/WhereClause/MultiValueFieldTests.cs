@@ -1899,4 +1899,30 @@ public class MultiValueFieldTests : EsqlTestBase
 			}
 		}
 	}
+
+	[Test]
+	public void Where_ContainsAfterARawWhereHoldingALimitInAString_TranslatesToMatch()
+	{
+		// the LIMIT is inside a string, not a command of the fragment
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("WHERE name != \"x|limit 1\"")
+			.Where(p => p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().EndWith("| WHERE (tags IS NOT NULL AND MATCH(tags, \"iot\"))");
+	}
+
+	[Test]
+	public void Where_ContainsAfterARawWhereAndALimit_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("WHERE name != \"x|y\" | LIMIT 5")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT*");
+	}
 }

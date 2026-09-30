@@ -2382,7 +2382,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// a fragment may hold several commands joined with the pipe
 	private static string? FindKeywordBlockingMatch(string fragment) =>
 		fragment
-			.Split('|')
+			.SplitCommands()
 			.Select(command => Array.Find(CommandsBlockingMatch, keyword => command.StartsWithCommand(keyword)))
 			.FirstOrDefault(keyword => keyword is not null);
 
@@ -2405,7 +2405,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// the first word of the first command in the fragment that is no WHERE or SORT
 	private static string? FindKeywordBlockingQstr(string fragment) =>
 		fragment
-			.Split('|')
+			.SplitCommands()
 			.Select(command => command.Trim())
 			.Where(command => command.Length > 0 && !Array.Exists(CommandsAllowingQstr, keyword => command.StartsWithCommand(keyword)))
 			.Select(command => command.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[0].ToUpperInvariant())

@@ -253,4 +253,36 @@ public class QueryStringPositionTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LOOKUP JOIN: it translates to QSTR*");
 	}
+
+	[Test]
+	[Arguments("WHERE name != \"a|b\"")]
+	[Arguments("WHERE name != \"a\\\"|keep name\"")]
+	[Arguments("WHERE name != \"\"\"a|keep \"b\" name\"\"\"")]
+	[Arguments("WHERE `a|keep` IS NULL")]
+	[Arguments("WHERE `a``|keep` IS NULL")]
+	public void Where_QstrAfterARawWhereHoldingAPipeInAString_Translates(string fragment)
+	{
+		// a pipe inside a string or a quoted name is no command separator
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql(fragment)
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().EndWith("| WHERE (tags IS NOT NULL AND QSTR(\"tags:wat*\"))");
+	}
+
+	[Test]
+	public void Where_QstrAfterARawFragmentWithAStringAndAKeep_ThrowsNotSupported()
+	{
+		// the pipe after the string still separates the commands
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("WHERE name != \"a|b\" | KEEP name, tags")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after KEEP: it translates to QSTR*");
+	}
 }
