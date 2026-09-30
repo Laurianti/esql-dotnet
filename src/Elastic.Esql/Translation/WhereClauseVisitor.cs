@@ -1965,6 +1965,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			all = !all;
 		}
 
+		// "abc".StartsWith(null) throws, and a stored value is never null
+		if (predicate.Kind is ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains
+			&& ResolvesToNull(predicate.Values[0]))
+			throw ComparisonWithNull(name);
+
 		if (positions is { } count)
 		{
 			AppendValuePattern(name, all, predicate, count);
@@ -2012,14 +2017,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private void AppendQueryString(string name, ElementPredicate predicate)
 	{
-		if (!TryGetConstant(predicate.Values[0], out var constant) || constant is not string text)
+		if (!TryGetConstant(predicate.Values[0], out var constant) || constant is null)
 		{
 			throw new NotSupportedException(
 				$"A text test over the values of {name} takes a string known when the query is written: "
 				+ "it translates to QSTR, whose query is a literal.");
 		}
 
-		var escaped = EscapeQueryString(text);
+		// a string, or a char, as in StartsWith('w'), which is the one-character string
+		var escaped = EscapeQueryString(constant is char character ? character.ToString() : (string)constant);
 		var pattern = predicate.Kind switch
 		{
 			ElementPredicateKind.StartsWith => escaped + "*",
@@ -2173,7 +2179,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var rendered = predicate.Values
 			.Select(value => predicate.Kind == ElementPredicateKind.Contains
 				? LikePatternContaining(value, field)
-				: TranslateSubExpression(value))
+				: TranslateText(value))
 			.ToList();
 
 		// the positions are one term of whatever encloses them
@@ -2246,12 +2252,32 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// A value a text test compares with, rendered as the string it stands for. A char is the
+	/// one-character string: a literal one is written as that string, and a captured one stays a
+	/// parameter under its own name, holding the string rather than a char, which the serializer
+	/// may have no contract for.
+	/// </summary>
+	private string TranslateText(Expression value)
+	{
+		if (value.Type != typeof(char) || !TryGetConstant(value, out var constant) || constant is not char character)
+			return TranslateSubExpression(value);
+
+		if (value is MemberExpression member && member.Expression.IsClosureRooted())
+		{
+			_resolvedCaptures[member] = character.ToString();
+			return TranslateSubExpression(member);
+		}
+
+		return EsqlFormatting.FormatString(character.ToString());
+	}
+
+	/// <summary>
 	/// The LIKE pattern of <c>x.Contains(v)</c>, with the wildcards of the value escaped. LIKE
 	/// takes its pattern as a literal, so the value has to be known when the query is written.
 	/// </summary>
 	private static string LikePatternContaining(Expression value, string field) =>
-		TryGetConstant(value, out var constant) && constant is string text
-			? EsqlFormatting.FormatString($"*{EscapeLikePattern(text)}*")
+		TryGetConstant(value, out var constant) && constant is string or char
+			? EsqlFormatting.FormatString($"*{EscapeLikePattern(constant is char character ? character.ToString() : (string)constant)}*")
 			: throw new NotSupportedException(
 				$"Contains over the values of {field} takes a string known when the query is written: "
 				+ "the test is a LIKE, whose pattern is a literal.");

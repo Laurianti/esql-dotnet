@@ -330,6 +330,142 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyStartsWithAChar_TranslatesToQstr()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith('w')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:w*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyEndsWithAChar_TranslatesToQstr()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.EndsWith('l')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*l"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyContainingAChar_TranslatesToQstr()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains('a')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyContainingACharOrdinally_TranslatesToQstr()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains('a', StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments(StringComparison.OrdinalIgnoreCase)]
+	[Arguments(StringComparison.CurrentCulture)]
+	public void Where_AnyContainingACharNotOrdinally_ThrowsNotSupported(StringComparison comparison)
+	{
+		// as for a string: ES|QL string matching is ordinal and case-sensitive
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains('a', comparison)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*other than StringComparison.Ordinal*");
+	}
+
+	[Test]
+	public void Where_AnyContainingAReservedCharOrdinally_EscapesIt()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains(':', StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyContainingACapturedCharOrdinally_StaysInline()
+	{
+		// QSTR takes its query as a literal
+		var letter = 'a';
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains(letter, StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*a*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllContainingACharOrdinally_ThrowsNotSupported()
+	{
+		// as for a string: QSTR answers whether some value passes the test, not whether every value does
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => t.Contains('a', StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*every value of tags must pass*Take(n)*");
+	}
+
+	[Test]
+	public void Where_AnyContainingAReservedChar_EscapesIt()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains(':')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*\\:*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_AnyStartsWithOverANestedObjectWithAHyphen_EscapesThatSegment()
 	{
 		// the path is built from the object and its member, each escaped for the query string on its own
@@ -491,5 +627,95 @@ public class QueryStringCornerCaseTests : EsqlTestBase
             FROM products
             | WHERE (`user-agent`.`AND` IS NOT NULL AND QSTR("user\\-agent.\\AND:wat*"))
             """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments('*', "tags:\\\\**")]
+	[Arguments('?', "tags:\\\\?*")]
+	[Arguments('"', "tags:\\\\\\\"*")]
+	[Arguments('\\', "tags:\\\\\\\\*")]
+	[Arguments('-', "tags:\\\\-*")]
+	[Arguments(' ', "tags:\\\\ *")]
+	public void Where_AnyStartsWithAReservedChar_EscapesItForBothSyntaxes(char reserved, string expected)
+	{
+		// escaped once for the query string syntax, then again for the ES|QL string
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(reserved)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("{{expected}}"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_NegatedAnyStartsWithAChar_StaysDefinite()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !p.Tags.Any(t => t.StartsWith('w')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT (tags IS NOT NULL AND QSTR("tags:w*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyNotStartingWithAChar_ThrowsNotSupported()
+	{
+		// as for a string: some value failing the test is not every value passing it, which QSTR cannot answer
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => !t.StartsWith('w')));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take(n)*");
+	}
+
+	[Test]
+	public void Where_AllStartsWithAChar_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.All(t => t.StartsWith('w')));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take(n)*");
+	}
+
+	[Test]
+	public void Where_AnyStartsWithNull_ThrowsNotSupported()
+	{
+		// "abc".StartsWith(null) throws, and a stored value is never null
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(null!)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
+	}
+
+	[Test]
+	public void Where_TakeContainingNull_ThrowsNotSupported()
+	{
+		// under Take(n) LOCATE over null would answer false rather than fail as C# does
+		string? nothing = null;
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains(nothing!)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
 	}
 }

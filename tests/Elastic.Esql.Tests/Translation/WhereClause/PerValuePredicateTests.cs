@@ -720,4 +720,162 @@ public class PerValuePredicateTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Contains over the values of tags*literal*");
 	}
+
+	[Test]
+	public void Where_TakeStartsWithAChar_ReadsItAsAOneCharacterString()
+	{
+		// t.StartsWith('w') is t.StartsWith("w")
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith('w')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"w\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeEndsWithAChar_ReadsItAsAOneCharacterString()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.EndsWith('l')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"ENDS_WITH({value}, \"l\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeContainingAChar_ReadsItAsAOneCharacterString()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains('a')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*a*\"", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeContainingACharOrdinally_ReadsItAsAOneCharacterString()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains('a', StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*a*\"", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments(StringComparison.OrdinalIgnoreCase)]
+	[Arguments(StringComparison.CurrentCulture)]
+	[Arguments(StringComparison.InvariantCultureIgnoreCase)]
+	public void Where_TakeContainingACharNotOrdinally_ThrowsNotSupported(StringComparison comparison)
+	{
+		// as for a string: ES|QL string matching is ordinal and case-sensitive
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains('a', comparison)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*StringComparison*");
+	}
+
+	[Test]
+	public void Where_TakeAllStartsWithAChar_ReadsEveryPosition()
+	{
+		// the refusal of All is for QSTR alone; with Take(n) every position is read
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).All(t => t.StartsWith('w')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AllOf("tags", value => $"STARTS_WITH({value}, \"w\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeStartsWithACapturedChar_IsOneStringParameter()
+	{
+		// the parameter carries the one-character string, not a char the JSON would write its own way
+		var letter = 'w';
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith(letter)));
+
+		var esql = query.ToEsqlString(inlineParameters: false);
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, ?letter)", positions: 2)}}
+            """.NativeLineEndings());
+		_ = query.GetParameters()!.Parameters["letter"].GetString().Should().Be("w");
+	}
+
+	[Test]
+	[Arguments('*', @"LIKE ""*\\**""")]
+	[Arguments('?', @"LIKE ""*\\?*""")]
+	[Arguments('\\', @"LIKE ""*\\\\*""")]
+	public void Where_TakeContainingAWildcardChar_EscapesIt(char wildcard, string expected)
+	{
+		// the character is matched as written, not as a pattern of its own
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains(wildcard)))
+			.ToString();
+
+		_ = esql.Should().Contain(expected);
+	}
+
+	[Test]
+	public void Where_TakeStartsWithAQuoteChar_IsEscaped()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith('"')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"\\\"\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeStartsWithABackslashChar_IsEscaped()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith('\\')))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"\\\\\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
 }
