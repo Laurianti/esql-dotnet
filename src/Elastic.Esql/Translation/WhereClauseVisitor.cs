@@ -2031,9 +2031,19 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		// false, as for MATCH, so the field is required to be present
 		ThrowIfACommandBlocksMatch("QSTR");
 		_ = _builder.Append('(').Append(name).Append(" IS NOT NULL AND QSTR(")
-			.Append(EsqlFormatting.FormatString(EscapeQueryString(name, keepDots: true) + ":" + pattern))
+			.Append(EsqlFormatting.FormatString(QueryStringFieldName(name) + ":" + pattern))
 			.Append("))");
 	}
+
+	/// <summary>
+	/// The field as the query string syntax names it. <paramref name="name"/> is the ES|QL path,
+	/// whose segments are backtick-quoted where ES|QL needs it: each segment is read back as it
+	/// is named in the mapping and escaped for the query string instead, where a backtick means
+	/// nothing and a bare AND, OR or NOT is an operator.
+	/// </summary>
+	private static string QueryStringFieldName(string name) =>
+		string.Join(".", EsqlIdentifier.SplitColumnName(name)
+			.Select(segment => segment is "AND" or "OR" or "NOT" ? "\\" + segment : EscapeQueryString(segment)));
 
 	// Every character the query string syntax reserves, whitespace included, is escaped with a
 	// backslash; the dots of a field path are part of its name

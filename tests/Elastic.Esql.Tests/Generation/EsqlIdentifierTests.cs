@@ -155,4 +155,27 @@ public class EsqlIdentifierTests
 	[Test]
 	public void FormatIndexPattern_MetadataInCommaList_ReturnsDoubleQuoted() =>
 		_ = EsqlIdentifier.FormatIndexPattern("logs-*,metadata").Should().Be("\"logs-*,metadata\"");
+
+	[Test]
+	public void SplitColumnName_PlainPath_SplitsAtTheDots() =>
+		_ = EsqlIdentifier.SplitColumnName("log.level").Should().Equal("log", "level");
+
+	[Test]
+	public void SplitColumnName_QuotedSegments_LoseTheirQuotes() =>
+		_ = EsqlIdentifier.SplitColumnName("`user-agent`.`os name`").Should().Equal("user-agent", "os name");
+
+	[Test]
+	public void SplitColumnName_DoubledBacktick_IsOneBacktickOfTheName() =>
+		_ = EsqlIdentifier.SplitColumnName("`back``tick`").Should().Equal("back`tick");
+
+	[Test]
+	[Arguments("message")]
+	[Arguments("log.level")]
+	[Arguments("@timestamp")]
+	[Arguments("user-agent.os name")]
+	[Arguments("back`tick.``")]
+	[Arguments("sort.AND.größe")]
+	[Arguments("ns:tags.a\\b.q\"q")]
+	public void SplitColumnName_OfAnEscapedPath_GivesBackItsSegments(string path) =>
+		_ = EsqlIdentifier.SplitColumnName(EsqlIdentifier.EscapeColumnName(path)).Should().Equal(path.Split('.'));
 }

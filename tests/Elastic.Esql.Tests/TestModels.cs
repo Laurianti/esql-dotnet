@@ -17,6 +17,9 @@ namespace Elastic.Esql.Tests;
 
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(TaggedProduct))]
+[JsonSerializable(typeof(OddlyNamedTaggedProduct))]
+[JsonSerializable(typeof(OddlyNestedTaggedProduct))]
+[JsonSerializable(typeof(PolicyNamedTaggedProduct))]
 [JsonSerializable(typeof(SetTaggedProduct))]
 [JsonSerializable(typeof(FrozenTaggedProduct))]
 [JsonSerializable(typeof(ImmutableTaggedProduct))]
@@ -146,6 +149,104 @@ public class TaggedProduct
 	public List<uint> Counts { get; set; } = [];
 
 	public List<double> Weights { get; set; } = [];
+}
+
+/// <summary>
+/// Document whose multi-value fields have names that ES|QL and the query string syntax quote
+/// differently: ES|QL backtick-quotes them, the query string escapes them with a backslash.
+/// </summary>
+public class OddlyNamedTaggedProduct
+{
+	[JsonPropertyName("user-tags")]
+	public string[] HyphenatedTags { get; set; } = [];
+
+	[JsonPropertyName("sort")]
+	public string[] KeywordTags { get; set; } = [];
+
+	[JsonPropertyName("os name")]
+	public string[] SpacedTags { get; set; } = [];
+
+	[JsonPropertyName("größe")]
+	public string[] NonAsciiTags { get; set; } = [];
+
+	[JsonPropertyName("back`tick")]
+	public string[] BacktickTags { get; set; } = [];
+
+	[JsonPropertyName("ns:tags")]
+	public string[] ColonTags { get; set; } = [];
+
+	[JsonPropertyName("tags*")]
+	public string[] WildcardTags { get; set; } = [];
+
+	[JsonPropertyName("user-agent.tags")]
+	public string[] DottedHyphenatedTags { get; set; } = [];
+
+	[JsonPropertyName("AND")]
+	public string[] AndTags { get; set; } = [];
+
+	[JsonPropertyName("OR")]
+	public string[] OrTags { get; set; } = [];
+
+	[JsonPropertyName("NOT")]
+	public string[] NotTags { get; set; } = [];
+
+	[JsonPropertyName("a\\b")]
+	public string[] BackslashTags { get; set; } = [];
+
+	[JsonPropertyName("a/b")]
+	public string[] SlashTags { get; set; } = [];
+
+	[JsonPropertyName("(p)")]
+	public string[] ParenthesizedTags { get; set; } = [];
+
+	[JsonPropertyName("x+y")]
+	public string[] PlusTags { get; set; } = [];
+
+	[JsonPropertyName("q\"q")]
+	public string[] QuoteTags { get; set; } = [];
+
+	[JsonPropertyName("and")]
+	public string[] LowercaseAndTags { get; set; } = [];
+
+	[JsonPropertyName("@tags")]
+	public string[] AtTags { get; set; } = [];
+
+	[JsonPropertyName("nb\u00a0sp")]
+	public string[] NoBreakSpaceTags { get; set; } = [];
+
+	[JsonPropertyName("-lead")]
+	public string[] LeadingMinusTags { get; set; } = [];
+
+	[JsonPropertyName("_exists_")]
+	public string[] ExistsTags { get; set; } = [];
+}
+
+/// <summary>Document whose field names come from the naming policy alone, with no attribute.</summary>
+public class PolicyNamedTaggedProduct
+{
+	public string[] UserTags { get; set; } = [];
+}
+
+/// <summary>
+/// Document whose multi-value fields sit inside an object with a name that ES|QL and the query
+/// string syntax quote differently, so the path is built from two members rather than one name.
+/// </summary>
+public class OddlyNestedTaggedProduct
+{
+	[JsonPropertyName("user-agent")]
+	public OddlyNamedAgent Agent { get; set; } = new();
+}
+
+public class OddlyNamedAgent
+{
+	[JsonPropertyName("tags")]
+	public string[] Tags { get; set; } = [];
+
+	[JsonPropertyName("os name")]
+	public string[] OsNames { get; set; } = [];
+
+	[JsonPropertyName("AND")]
+	public string[] AndTags { get; set; } = [];
 }
 
 /// <summary>Document whose tags are a set: a set answers Contains by its own comparer.</summary>

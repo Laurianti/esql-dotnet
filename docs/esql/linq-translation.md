@@ -187,7 +187,7 @@ Elasticsearch does not allow `MATCH` or `QSTR` after `FORK`, `LIMIT` or `STATS`,
 .Where(p => p.Tags.Any(t => t.Contains("at")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*at*"))
 ```
 
-The text is escaped for the query string syntax, and has to be known when the query is written, since `QSTR` takes its query as a literal. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
+The text and the field name are escaped for the query string syntax, where a field name is not quoted with backticks, and the text has to be known when the query is written, since `QSTR` takes its query as a literal. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
 
 `All` over such a test, or `Any` over its negation, has no answer over the field as a whole: `QSTR` answers whether some value passes it, not whether every value does. It needs the field read position by position. How many positions to read is stated with `Take(n)` on the field, which already means "the first n" in LINQ. Each position is read with `MV_SLICE` and tested on its own:
 
