@@ -7,7 +7,7 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 /// <summary>
 /// Any, All and Contains over the first values of a multi-value field, as many as Take
 /// states on the field. Each position is read with MV_SLICE and tested on its own, so a
-/// predicate MATCH cannot answer, such as "starts with", is answered too, and every
+/// predicate that MATCH cannot answer, such as "starts with", is answered too, and every
 /// predicate reads the positions Take states rather than the whole field.
 /// </summary>
 public class PerValuePredicateTests : EsqlTestBase
