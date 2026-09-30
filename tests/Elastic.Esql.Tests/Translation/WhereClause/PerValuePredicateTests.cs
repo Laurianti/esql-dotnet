@@ -1472,4 +1472,94 @@ public class PerValuePredicateTests : EsqlTestBase
 
 		_ = holder.Reads.Should().Be(1);
 	}
+
+	[Test]
+	public void Where_AllOverAnEmptyListWithARangeFromTheSecondValue_HoldsWhenThereIsNoSecondValue()
+	{
+		// Take(1..3) of a field with one value is empty, and All over no value holds
+		var nothing = Array.Empty<string>();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(1, 3)).All(t => nothing.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MV_SLICE(tags, 1, 1) IS NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllOverAnEmptyListWithARangeBeforeTheLastValue_HoldsWhenThereIsNoSecondToLast()
+	{
+		// Take(^3..^1) is empty when the field holds fewer than two values
+		var nothing = Array.Empty<string>();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(Index.FromEnd(3), Index.FromEnd(1))).All(t => nothing.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE MV_SLICE(tags, -2, -2) IS NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllOverAnEmptyListWithARangeFromTheFirstValue_HoldsForAnEmptyField()
+	{
+		// a range from the first value is empty only when the field is
+		var nothing = Array.Empty<string>();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(3)).All(t => nothing.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE tags IS NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllOverAnEmptyListWithARangeToTheLastValue_HoldsForAnEmptyField()
+	{
+		// and so is a range to the last value
+		var nothing = Array.Empty<string>();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(2))).All(t => nothing.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE tags IS NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyOutsideAnEmptyListWithARangeFromTheSecondValue_NeedsASecondValue()
+	{
+		// some value of Take(1..3) outside an empty list is some value there at all
+		var nothing = Array.Empty<string>();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(1, 3)).Any(t => !nothing.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT MV_SLICE(tags, 1, 1) IS NULL
+            """.NativeLineEndings());
+	}
 }

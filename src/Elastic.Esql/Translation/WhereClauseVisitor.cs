@@ -1546,12 +1546,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
 			// array is stored as a missing field, so IS NOT NULL is the same test, and one
-			// Lucene answers as an exists query. A range that starts past the first value, or
-			// ends before the last, holds one when the field holds the value at its nearer end.
-			var nearest = positions is { } range ? (range.First >= 0 ? range.First : range.First + range.Count - 1) : 0;
-			_ = nearest is 0 or -1
-				? _builder.Append(name).Append(" IS NOT NULL")
-				: _builder.Append("MV_SLICE(").Append(name).Append(", ").Append(nearest).Append(", ").Append(nearest).Append(") IS NOT NULL");
+			// Lucene answers as an exists query
+			AppendHoldsAValue(name, positions, holds: true);
 			return true;
 		}
 
@@ -2273,10 +2269,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private void AppendValuePattern(string field, bool all, ElementPredicate predicate, Positions positions)
 	{
-		// All over an empty list holds only for the empty field; Any never does
+		// All over an empty list holds only where the positions hold no value; Any never does
 		if (predicate.Kind == ElementPredicateKind.In && predicate.Values.Count == 0)
 		{
-			_ = _builder.Append(all ? field + " IS NULL" : "false");
+			if (all)
+				AppendHoldsAValue(field, positions, holds: false);
+			else
+				_ = _builder.Append("false");
+
 			return;
 		}
 
@@ -2312,6 +2312,21 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (positions.Count > 1)
 			_ = _builder.Append(')');
+	}
+
+	/// <summary>
+	/// Whether the positions hold a value, or hold none. A range that starts past the first value,
+	/// or ends before the last, holds one when the field holds the value at its nearer end; one from
+	/// the first value, or to the last, holds one as soon as the field does.
+	/// </summary>
+	private void AppendHoldsAValue(string field, Positions? positions, bool holds)
+	{
+		var nearest = positions is { } range ? (range.First >= 0 ? range.First : range.First + range.Count - 1) : 0;
+		var test = holds ? " IS NOT NULL" : " IS NULL";
+
+		_ = nearest is 0 or -1
+			? _builder.Append(field).Append(test)
+			: _builder.Append("MV_SLICE(").Append(field).Append(", ").Append(nearest).Append(", ").Append(nearest).Append(')').Append(test);
 	}
 
 	/// <summary>
