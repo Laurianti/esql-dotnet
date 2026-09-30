@@ -156,6 +156,22 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Where_AnyStartsWithAnAngleBracket_EscapesIt()
+	{
+		// escaped, < and > are read as themselves rather than as a range
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("a<b>c", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:a\\<b\\>c*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Where_AnyStartsWithOverAFieldNamedAnd_EscapesALetterOfTheOperator()
 	{
 		// the query string syntax reads a bare AND as its operator, whatever is escaped around it
@@ -326,6 +342,46 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 			"""
             FROM products
             | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:*wat*", {"allow_leading_wildcard": true}))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithMixedCase_KeepsTheCase()
+	{
+		// the pattern keeps the case it is given; whether the field compares it depends on its mapping
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("Wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:Wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments("a\nb", "a\\\\\\nb*")]
+	[Arguments("a/b", "a\\\\/b*")]
+	[Arguments("a?b", "a\\\\?b*")]
+	[Arguments("[x", "\\\\[x*")]
+	[Arguments("-x", "\\\\-x*")]
+	[Arguments("+x", "\\\\+x*")]
+	[Arguments("AND", "AND*")]
+	[Arguments("😀", "😀*")]
+	[Arguments("", "*")]
+	public void Where_AnyStartsWithAnOddValue_EscapesItForBothSyntaxes(string prefix, string expected)
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(prefix, StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:{expected}"))
             """.NativeLineEndings());
 	}
 
@@ -530,6 +586,38 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 			"""
             FROM products
             | WHERE (`user-tags` IS NOT NULL AND QSTR("user\\-tags:wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithAGreaterThan_EscapesItSoItIsNoRange()
+	{
+		// a bare leading > would read as a range, "greater than x"
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(">x", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:\\>x*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithALessThan_EscapesItSoItIsNoRange()
+	{
+		// a bare leading < would read as a range, "less than x"
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("<x", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:\\<x*"))
             """.NativeLineEndings());
 	}
 
