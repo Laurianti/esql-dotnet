@@ -2061,14 +2061,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			.Select(segment => segment is "AND" or "OR" or "NOT" ? "\\" + segment : EscapeQueryString(segment)));
 
 	// Every character the query string syntax reserves, whitespace included, is escaped with a
-	// backslash; the dots of a field path are part of its name
-	private static string EscapeQueryString(string value, bool keepDots = false)
+	// backslash
+	private static string EscapeQueryString(string value)
 	{
 		var builder = new StringBuilder(value.Length);
 
 		foreach (var character in value)
 		{
-			if ((QueryStringReserved.Contains(character) || char.IsWhiteSpace(character)) && !(keepDots && character == '.'))
+			if (QueryStringReserved.Contains(character) || char.IsWhiteSpace(character))
 				_ = builder.Append('\\');
 
 			_ = builder.Append(character);
