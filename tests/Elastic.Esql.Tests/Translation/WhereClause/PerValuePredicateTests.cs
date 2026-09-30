@@ -339,7 +339,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AnyOf("tags", value => $"({value} == \"iot\" OR {value} == \"water\")")}}
+            | WHERE {{AnyOf("tags", value => $"{value} IN (\"iot\", \"water\")")}}
             """.NativeLineEndings());
 	}
 
@@ -356,7 +356,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AllOf("tags", value => $"({value} == \"iot\" OR {value} == \"water\")")}}
+            | WHERE {{AllOf("tags", value => $"{value} IN (\"iot\", \"water\")")}}
             """.NativeLineEndings());
 	}
 
@@ -373,7 +373,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AllOf("ratings", value => $"({value} == 5 OR {value} == 42)")}}
+            | WHERE {{AllOf("ratings", value => $"{value} IN (5, 42)")}}
             """.NativeLineEndings());
 	}
 
@@ -639,17 +639,19 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_PositionsAndValuesTogether_AreBounded()
+	public void Where_ManyPositionsAndManyValues_AreOneInPerPosition()
 	{
+		// IN is one node per position whatever the count of values, so the bound on positions
+		// is the only one: 200 positions over 100 values translate
 		var wanted = Enumerable.Range(0, 100).Select(i => $"tag{i}").ToArray();
 
-		var query = CreateQuery<TaggedProduct>()
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(200).Any(t => wanted.Contains(t)));
+			.Where(p => p.Tags.Take(200).Any(t => wanted.Contains(t)))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*together*");
+		_ = esql.Should().Contain("MV_SLICE(tags, 199, 199) IN (\"tag0\", ");
+		_ = esql.Should().NotContain(" == ");
 	}
 
 	[Test]
@@ -958,5 +960,72 @@ public class PerValuePredicateTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOverAConstantListOfOneValue_IsAnInOfOne()
+	{
+		var wanted = new[] { "iot" };
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"{value} IN (\"iot\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeOverAConstantListOfMoreThanTheBound_TranslatesAsWell()
+	{
+		// the values no longer add levels to the expression, so a list longer than the bound
+		// on positions translates under Take(n)
+		var wanted = Enumerable.Range(0, 300).Select(i => $"tag{i}").ToArray();
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Contain("\"tag299\")");
+	}
+
+	[Test]
+	public void Where_TakeOverAConstantListOfEnums_WritesThemAsTheSerializerDoes()
+	{
+		// an enum written by name is compared by name, as for a single field
+		var wanted = new List<Grade> { Grade.High };
+
+		var esql = CreateQuery<TypedValuesProduct>()
+			.From("products")
+			.Where(p => p.Grades.Take(2).Any(g => wanted.Contains(g)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("grades", value => $"{value} IN (\"High\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_NegatedTakeOverAConstantList_TestsNoPositionIsListed()
+	{
+		var wanted = new[] { "iot", "water" };
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => !wanted.Contains(t)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE NOT {{AllOf("tags", value => $"{value} IN (\"iot\", \"water\")", positions: 2)}}
+            """.NativeLineEndings());
 	}
 }

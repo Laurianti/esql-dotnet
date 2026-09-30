@@ -27,9 +27,10 @@ namespace Elastic.Esql.Translation;
 internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : ExpressionVisitor
 {
 	/// <summary>
-	/// How many terms a multi-value predicate may join: the positions Take(n) reads, the
-	/// values of a captured collection, or both together. Each one adds a level to the
-	/// expression Elasticsearch parses, and it stops accepting them past this.
+	/// How many terms a multi-value predicate may join: the positions Take(n) reads, or the
+	/// values of a captured collection that MATCH tests one at a time. Each one adds a level to
+	/// the expression Elasticsearch parses, and it stops accepting them past this; the values
+	/// of one IN add none.
 	/// </summary>
 	private const int MaxPredicateTerms = 256;
 
@@ -2171,16 +2172,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return;
 		}
 
-		// under In the values are written out inside every position as an OR chain, and
-		// a chain of n values adds n - 1 levels to the positions' own; any other predicate
-		// tests one value per position and adds none
-		if (predicate.Kind == ElementPredicateKind.In && positions + predicate.Values.Count - 1 > MaxPredicateTerms)
-		{
-			throw new NotSupportedException(
-				$"{positions} positions and {predicate.Values.Count} values together are more than the expression "
-				+ $"Elasticsearch parses allows: at most {MaxPredicateTerms} of both.");
-		}
-
 		// Rendered once, before the positions, so a captured value becomes one parameter
 		// rather than one per position. A Contains pattern is a LIKE literal with its
 		// wildcards escaped.
@@ -2223,41 +2214,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// The test on one value. A comparison is made on the value as it is stored, so any
 	/// type ES|QL compares is read the same way; a text predicate reads a string.
 	/// </summary>
-	private void AppendValuePredicate(string value, ElementPredicateKind kind, IReadOnlyList<string> rendered)
-	{
-		switch (kind)
+	private void AppendValuePredicate(string value, ElementPredicateKind kind, IReadOnlyList<string> rendered) =>
+		_ = _builder.Append(kind switch
 		{
-			case ElementPredicateKind.Contains:
-				_ = _builder.Append(value).Append(" LIKE ").Append(rendered[0]);
-				break;
-
-			case ElementPredicateKind.EndsWith:
-				_ = _builder.Append("ENDS_WITH(").Append(value).Append(", ").Append(rendered[0]).Append(')');
-				break;
-
-			case ElementPredicateKind.In:
-				_ = _builder.Append('(');
-
-				for (var i = 0; i < rendered.Count; i++)
-				{
-					if (i > 0)
-						_ = _builder.Append(" OR ");
-
-					_ = _builder.Append(value).Append(" == ").Append(rendered[i]);
-				}
-
-				_ = _builder.Append(')');
-				break;
-
-			case ElementPredicateKind.StartsWith:
-				_ = _builder.Append("STARTS_WITH(").Append(value).Append(", ").Append(rendered[0]).Append(')');
-				break;
-
-			default:
-				_ = _builder.Append(value).Append(' ').Append(ComparisonOperator(kind)).Append(' ').Append(rendered[0]);
-				break;
-		}
-	}
+			ElementPredicateKind.Contains => $"{value} LIKE {rendered[0]}",
+			ElementPredicateKind.EndsWith => $"ENDS_WITH({value}, {rendered[0]})",
+			// one IN per position, which adds one level to the expression whatever the count of values
+			ElementPredicateKind.In => $"{value} IN ({string.Join(", ", rendered)})",
+			ElementPredicateKind.StartsWith => $"STARTS_WITH({value}, {rendered[0]})",
+			_ => $"{value} {ComparisonOperator(kind)} {rendered[0]}"
+		});
 
 	/// <summary>
 	/// A value a text test compares with, rendered as the string it stands for. A char is the
