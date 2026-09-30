@@ -821,7 +821,7 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 	public void Where_TakeContainingNull_ThrowsNotSupported()
 	{
 		// under Take(n) LOCATE over null would answer false rather than fail as C# does
-		string? nothing = null;
+		var nothing = (string?)null;
 
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
