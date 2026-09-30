@@ -1994,7 +1994,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (positions is { } count)
 		{
-			AppendValuePattern(name, all, predicate, count);
+			AppendValuePattern(name, all: all, predicate, count);
 			return;
 		}
 
