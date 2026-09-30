@@ -878,4 +878,85 @@ public class PerValuePredicateTests : EsqlTestBase
             | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"\\\\\")", positions: 2)}}
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Where_TakeOfARangeFromTheStart_ThrowsNotSupported()
+	{
+		// Take(Range) takes two arguments as Take(int) does, and is told apart by its type; an
+		// expression tree takes no .. literal, so the range is built by a method
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeWithBothEnds_ThrowsNotSupported()
+	{
+		// the range is refused whatever its ends
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(0, 4)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeFromTheEnd_ThrowsNotSupported()
+	{
+		// the last values have no position counted from the start
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(2))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeWithAnyWithoutAPredicate_ThrowsNotSupported()
+	{
+		// the Take is read before the predicate, so an Any without one is refused alike
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Any());
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeWithContains_ThrowsNotSupported()
+	{
+		// as for Any
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Contains("water"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
+
+	[Test]
+	public void Where_TakeOfACapturedRange_ThrowsNotSupported()
+	{
+		// a captured range is a range all the same
+		var firstFour = ..4;
+
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(firstFour).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+	}
 }

@@ -1544,6 +1544,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			|| take.Method.DeclaringType != typeof(Enumerable))
 			return null;
 
+		// Take(Range) has two arguments as well; by name, since netstandard2.0 has no System.Range
+		if (take.Arguments[1].Type.FullName == "System.Range")
+		{
+			throw new NotSupportedException(
+				"Take with a range on a multi-value field is not supported: the positions read are stated "
+				+ "with a count from the first value, as in Take(4).");
+		}
+
 		if (!TryGetConstant(take.Arguments[1], out var taken) || taken is not int count || count < 1)
 		{
 			throw new NotSupportedException(
