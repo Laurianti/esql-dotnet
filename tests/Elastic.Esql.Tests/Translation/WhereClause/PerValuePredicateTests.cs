@@ -64,7 +64,7 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_AnyContains_TestsEachPositionWithLike()
+	public void Where_AnyContains_TestsEachPositionWithLocate()
 	{
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
@@ -74,7 +74,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*at*\"")}}
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, \"at\") > 0")}}
             """.NativeLineEndings());
 	}
 
@@ -150,7 +150,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE NOT {{AnyOf("tags", value => $"{value} LIKE \"*at*\"")}}
+            | WHERE NOT {{AnyOf("tags", value => $"LOCATE({value}, \"at\") > 0")}}
             """.NativeLineEndings());
 	}
 
@@ -481,21 +481,24 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_ACapturedContainsPattern_StaysInline()
+	public void Where_ACapturedContainsValue_IsOneParameterForAllPositions()
 	{
-		// a LIKE pattern is written inline, as for a single field
+		// LOCATE takes the value as any other argument, so a captured one is a parameter, as
+		// for StartsWith and EndsWith
 		var fragment = "ate";
 
-		var esql = CreateQuery<TaggedProduct>()
+		var query = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Positions).Any(t => t.Contains(fragment, StringComparison.Ordinal)))
-			.ToEsqlString(inlineParameters: false);
+			.Where(p => p.Tags.Take(Positions).Any(t => t.Contains(fragment, StringComparison.Ordinal)));
+
+		var esql = query.ToEsqlString(inlineParameters: false);
 
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*ate*\"")}}
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, ?fragment) > 0")}}
             """.NativeLineEndings());
+		_ = query.GetParameters()!.Parameters["fragment"].GetString().Should().Be("ate");
 	}
 
 	[Test]
@@ -532,19 +535,19 @@ public class PerValuePredicateTests : EsqlTestBase
 			.Where(p => p.Tags.Take(Positions).Any(t => t.Contains("a\"b", StringComparison.Ordinal)))
 			.ToString();
 
-		_ = esql.Should().Contain(@"LIKE ""*a\""b*""");
+		_ = esql.Should().Contain(@"LOCATE(MV_SLICE(tags, 0, 0), ""a\""b"") > 0");
 	}
 
 	[Test]
-	public void Where_AWildcardInAContainsValue_IsEscaped()
+	public void Where_AWildcardInAContainsValue_IsMatchedAsWritten()
 	{
-		// the value is matched as written, not as a pattern of its own
+		// LOCATE has no wildcards, so the value needs no escaping of its own
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Take(Positions).Any(t => t.Contains("a*b", StringComparison.Ordinal)))
 			.ToString();
 
-		_ = esql.Should().Contain(@"LIKE ""*a\\*b*""");
+		_ = esql.Should().Contain(@"LOCATE(MV_SLICE(tags, 0, 0), ""a*b"") > 0");
 	}
 
 	[Test]
@@ -711,16 +714,19 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_TakeWithContainsOfAField_ThrowsNotSupported()
+	public void Where_TakeWithContainsOfAField_LocatesTheField()
 	{
-		// LIKE takes its pattern as a literal
-		var query = CreateQuery<TaggedProduct>()
+		// LOCATE takes a field as its second argument, as STARTS_WITH does
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Positions).Any(t => t.Contains(p.Name)));
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains(p.Name)))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Contains over the values of tags*literal*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, name) > 0", positions: 2)}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
@@ -765,7 +771,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*a*\"", positions: 2)}}
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, \"a\") > 0", positions: 2)}}
             """.NativeLineEndings());
 	}
 
@@ -780,7 +786,7 @@ public class PerValuePredicateTests : EsqlTestBase
 		_ = esql.Should().Be(
 			$$"""
             FROM products
-            | WHERE {{AnyOf("tags", value => $"{value} LIKE \"*a*\"", positions: 2)}}
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, \"a\") > 0", positions: 2)}}
             """.NativeLineEndings());
 	}
 
@@ -837,12 +843,12 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	[Arguments('*', @"LIKE ""*\\**""")]
-	[Arguments('?', @"LIKE ""*\\?*""")]
-	[Arguments('\\', @"LIKE ""*\\\\*""")]
-	public void Where_TakeContainingAWildcardChar_EscapesIt(char wildcard, string expected)
+	[Arguments('*', @"LOCATE(MV_SLICE(tags, 0, 0), ""*"") > 0")]
+	[Arguments('?', @"LOCATE(MV_SLICE(tags, 0, 0), ""?"") > 0")]
+	[Arguments('\\', @"LOCATE(MV_SLICE(tags, 0, 0), ""\\"") > 0")]
+	public void Where_TakeContainingAWildcardChar_IsMatchedAsWritten(char wildcard, string expected)
 	{
-		// the character is matched as written, not as a pattern of its own
+		// LOCATE has no wildcards; only the ES|QL string escapes the backslash
 		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Take(2).Any(t => t.Contains(wildcard)))
@@ -1026,6 +1032,37 @@ public class PerValuePredicateTests : EsqlTestBase
 			$$"""
             FROM products
             | WHERE NOT {{AllOf("tags", value => $"{value} IN (\"iot\", \"water\")", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeContainingTheEmptyString_HoldsForEveryValue()
+	{
+		// "abc".Contains("") is true, and LOCATE finds the empty string at the first position
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains("")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"LOCATE({value}, \"\") > 0", positions: 2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeAllContaining_LocatesAtEveryPosition()
+	{
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).All(t => t.Contains("at")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AllOf("tags", value => $"LOCATE({value}, \"at\") > 0", positions: 2)}}
             """.NativeLineEndings());
 	}
 }

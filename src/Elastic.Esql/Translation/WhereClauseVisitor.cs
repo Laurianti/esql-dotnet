@@ -2173,13 +2173,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		// Rendered once, before the positions, so a captured value becomes one parameter
-		// rather than one per position. A Contains pattern is a LIKE literal with its
-		// wildcards escaped.
-		var rendered = predicate.Values
-			.Select(value => predicate.Kind == ElementPredicateKind.Contains
-				? LikePatternContaining(value, field)
-				: TranslateText(value))
-			.ToList();
+		// rather than one per position
+		var rendered = predicate.Values.Select(TranslateText).ToList();
 
 		// the positions are one term of whatever encloses them
 		if (positions > 1)
@@ -2217,7 +2212,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private void AppendValuePredicate(string value, ElementPredicateKind kind, IReadOnlyList<string> rendered) =>
 		_ = _builder.Append(kind switch
 		{
-			ElementPredicateKind.Contains => $"{value} LIKE {rendered[0]}",
+			// LOCATE is 1-based and 0 when the text is absent; it finds the empty string at 1,
+			// as "abc".Contains("") holds
+			ElementPredicateKind.Contains => $"LOCATE({value}, {rendered[0]}) > 0",
 			ElementPredicateKind.EndsWith => $"ENDS_WITH({value}, {rendered[0]})",
 			// one IN per position, which adds one level to the expression whatever the count of values
 			ElementPredicateKind.In => $"{value} IN ({string.Join(", ", rendered)})",
@@ -2244,17 +2241,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		return EsqlFormatting.FormatString(character.ToString());
 	}
-
-	/// <summary>
-	/// The LIKE pattern of <c>x.Contains(v)</c>, with the wildcards of the value escaped. LIKE
-	/// takes its pattern as a literal, so the value has to be known when the query is written.
-	/// </summary>
-	private static string LikePatternContaining(Expression value, string field) =>
-		TryGetConstant(value, out var constant) && constant is string or char
-			? EsqlFormatting.FormatString($"*{EscapeLikePattern(constant is char character ? character.ToString() : (string)constant)}*")
-			: throw new NotSupportedException(
-				$"Contains over the values of {field} takes a string known when the query is written: "
-				+ "the test is a LIKE, whose pattern is a literal.");
 
 	/// <summary>
 	/// Whether the method is the framework's own: Enumerable, MemoryExtensions and, for an
