@@ -1430,4 +1430,46 @@ public class PerValuePredicateTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*at most 256*");
 	}
+
+	[Test]
+	public void Where_TakeStartsWithACapturedText_ReadsItOnce()
+	{
+		// the null check and the positions share the value read
+		var holder = new CountingValue<string>("wat");
+
+		_ = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith(holder.Value, StringComparison.Ordinal)))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
+
+	[Test]
+	public void Where_TakeStartsWithACapturedCharValue_ReadsItOnce()
+	{
+		// as for a string
+		var holder = new CountingValue<char>('w');
+
+		_ = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.StartsWith(holder.Value)))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
+
+	[Test]
+	public void Where_TakeContainingACapturedText_ReadsItOnce()
+	{
+		// as for StartsWith
+		var holder = new CountingValue<string>("at");
+
+		_ = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(2).Any(t => t.Contains(holder.Value)))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
 }

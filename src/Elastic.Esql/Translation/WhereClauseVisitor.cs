@@ -1505,6 +1505,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary>
+	/// The value of an expression that the null check may already have read: a captured one is
+	/// taken from what it resolved, so that its getters run once, and anything else is evaluated.
+	/// </summary>
+	private bool TryGetResolvedConstant(Expression expression, out object? value) =>
+		_resolvedCaptures.TryGetValue(expression.UnwrapConvertExpressions(), out value)
+			? value is not null
+			: TryGetConstant(expression, out value);
+
+	/// <summary>
 	/// Predicates over a multi-value document field: <c>field.Any(...)</c>,
 	/// <c>field.All(...)</c> and <c>field.Contains(value)</c>. A document holds every
 	/// value of the field at once, so the quantifier is answered on the field itself,
@@ -2120,7 +2129,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private void AppendQueryString(string name, ElementPredicate predicate)
 	{
-		if (!TryGetConstant(predicate.Values[0], out var constant) || constant is null)
+		if (!TryGetResolvedConstant(predicate.Values[0], out var constant) || constant is null)
 		{
 			throw new NotSupportedException(
 				$"A text test over the values of {name} takes a string known when the query is written: "
@@ -2330,7 +2339,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private string TranslateText(Expression value)
 	{
-		if (value.Type != typeof(char) || !TryGetConstant(value, out var constant) || constant is not char character)
+		if (value.Type != typeof(char) || !TryGetResolvedConstant(value, out var constant) || constant is not char character)
 			return TranslateSubExpression(value);
 
 		if (value is MemberExpression member && member.Expression.IsClosureRooted())
