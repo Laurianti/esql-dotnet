@@ -40,6 +40,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// the only commands Elasticsearch allows QSTR after, besides the FROM that opens the query
 	private static readonly string[] CommandsAllowingQstr = ["SORT", "WHERE"];
 
+	// the characters the query string syntax reserves, each escaped with a backslash inside QSTR
+	private static readonly HashSet<char> QueryStringReserved = [.. "+-=&|><!(){}[]^\"~*?:\\/"];
+
 	// the collections of the base library that compare with default equality, the immutable
 	// ones by name since the netstandard2.0 build does not reference their assembly
 	private static readonly HashSet<Type> DefaultEqualityCollections =
@@ -2086,8 +2089,6 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		return builder.ToString();
 	}
-
-	private static readonly HashSet<char> QueryStringReserved = [.. "+-=&|><!(){}[]^\"~*?:\\/"];
 
 	/// <summary>Any and All over equality with one value.</summary>
 	private void AppendEquality(string name, bool all, ElementPredicate predicate)
