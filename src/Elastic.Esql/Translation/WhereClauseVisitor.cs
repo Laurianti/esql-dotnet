@@ -95,6 +95,13 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		bool Negated);
 
 	/// <summary>
+	/// The positions a <c>Take</c> on the field reads: <paramref name="Count"/> of them from
+	/// <paramref name="First"/>, which is negative when they are counted from the last value, as
+	/// MV_SLICE counts them.
+	/// </summary>
+	private readonly record struct Positions(int First, int Count);
+
+	/// <summary>
 	/// Translates a predicate expression to an ES|QL condition string.
 	/// </summary>
 	public string Translate(Expression expression)
@@ -1519,7 +1526,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 
 		source = StripTake(source, out var take);
-		var positions = take is null ? (int?)null : PositionsTaken(take);
+		var positions = take is null ? (Positions?)null : PositionsTaken(take);
 		ThrowIfNotAField(node.Method.Name, source);
 		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
 		var name = ResolveMultiValueField(source);
@@ -1530,8 +1537,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
 			// array is stored as a missing field, so IS NOT NULL is the same test, and one
-			// Lucene answers as an exists query
-			_ = _builder.Append(name).Append(" IS NOT NULL");
+			// Lucene answers as an exists query. A range that starts past the first value, or
+			// ends before the last, holds one when the field holds the value at its nearer end.
+			var nearest = positions is { } range ? (range.First >= 0 ? range.First : range.First + range.Count - 1) : 0;
+			_ = nearest is 0 or -1
+				? _builder.Append(name).Append(" IS NOT NULL")
+				: _builder.Append("MV_SLICE(").Append(name).Append(", ").Append(nearest).Append(", ").Append(nearest).Append(") IS NOT NULL");
 			return true;
 		}
 
@@ -1556,16 +1567,16 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		return take?.Arguments[0] ?? source;
 	}
 
-	/// <summary>The count of a <c>field.Take(n)</c>, refused when it is no count Elasticsearch can read.</summary>
-	private static int PositionsTaken(MethodCallExpression take)
+	/// <summary>
+	/// The positions a <c>field.Take(n)</c> or a <c>field.Take(range)</c> reads, refused when they
+	/// are no positions Elasticsearch can read.
+	/// </summary>
+	private static Positions PositionsTaken(MethodCallExpression take)
 	{
 		// Take(Range) has two arguments as well; by name, since netstandard2.0 has no System.Range
+		// of its own
 		if (take.Arguments[1].Type.FullName == "System.Range")
-		{
-			throw new NotSupportedException(
-				"Take with a range on a multi-value field is not supported: the positions read are stated "
-				+ "with a count from the first value, as in Take(4).");
-		}
+			return PositionsOfRange(take.Arguments[1]);
 
 		if (!TryGetConstant(take.Arguments[1], out var taken) || taken is not int count || count < 1)
 		{
@@ -1581,8 +1592,77 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				+ $"to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
 		}
 
-		return count;
+		return new Positions(0, count);
 	}
+
+	/// <summary>
+	/// The positions of a constant range with both ends counted from the first value, or both from
+	/// the last, which MV_SLICE reads as negative positions. A range with one end counted from each
+	/// reads positions that depend on how many values the field holds, and is refused.
+	/// </summary>
+	private static Positions PositionsOfRange(Expression argument)
+	{
+		if (ResolveRangePart(argument) is not Range range)
+		{
+			throw new NotSupportedException(
+				"Take with a range on a multi-value field takes a constant range, known when the query is "
+				+ "written: the positions to read have to be fixed then.");
+		}
+
+		if (range.Start.IsFromEnd != range.End.IsFromEnd)
+		{
+			throw new NotSupportedException(
+				$"Take({range}) on a multi-value field is not supported: it counts one end from the first value "
+				+ "and the other from the last, so the positions it reads depend on how many values the field "
+				+ "holds. Count both ends from the same side, as in Take(1..4) or Take(^3..).");
+		}
+
+		var fromEnd = range.Start.IsFromEnd;
+		var first = fromEnd ? -range.Start.Value : range.Start.Value;
+		var count = fromEnd ? range.Start.Value - range.End.Value : range.End.Value - range.Start.Value;
+
+		if (count < 1)
+			throw new NotSupportedException($"Take({range}) on a multi-value field reads no position.");
+
+		if (count > MaxPredicateTerms)
+		{
+			throw new NotSupportedException(
+				$"Take({range}) on a multi-value field is not supported: each position adds a level to the "
+				+ $"expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
+		}
+
+		return new Positions(first, count);
+	}
+
+	/// <summary>
+	/// The value of a Range, or of an Index within one, built in the query. An expression tree
+	/// takes no <c>..</c> or <c>^</c> literal, so they come from Range.StartAt, Range.EndAt,
+	/// Index.FromStart, Index.FromEnd, a constructor, the conversion from an int or a captured
+	/// value; anything else is no constant range.
+	/// </summary>
+	private static object? ResolveRangePart(Expression expression) => expression switch
+	{
+		MethodCallExpression { Object: null, Arguments.Count: 1 } call
+			when call.Method.DeclaringType == typeof(Range) || call.Method.DeclaringType == typeof(Index) =>
+			(call.Method.Name, ResolveRangePart(call.Arguments[0])) switch
+			{
+				(nameof(Range.StartAt), Index start) => Range.StartAt(start),
+				(nameof(Range.EndAt), Index end) => Range.EndAt(end),
+				(nameof(Index.FromStart), int value) when value >= 0 => Index.FromStart(value),
+				(nameof(Index.FromEnd), int value) when value >= 0 => Index.FromEnd(value),
+				_ => null
+			},
+
+		NewExpression { Arguments.Count: 2 } construction when construction.Type == typeof(Range) =>
+			ResolveRangePart(construction.Arguments[0]) is Index from && ResolveRangePart(construction.Arguments[1]) is Index to
+				? new Range(from, to)
+				: null,
+
+		UnaryExpression { NodeType: ExpressionType.Convert } conversion when conversion.Type == typeof(Index) =>
+			ResolveRangePart(conversion.Operand) is int position and >= 0 ? (Index)position : null,
+
+		_ => TryGetConstant(expression, out var constant) ? constant : null
+	};
 
 	/// <summary>
 	/// A predicate over a multi-value field compared with a boolean, <c>p.Tags.Any() == false</c>.
@@ -1708,7 +1788,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// answered as that. An overload taking a comparer other than the default asks for a
 	/// comparison the translation cannot honour.
 	/// </summary>
-	private bool TryVisitFieldContains(MethodCallExpression node, Expression source, string name, int? positions)
+	private bool TryVisitFieldContains(MethodCallExpression node, Expression source, string name, Positions? positions)
 	{
 		var takesComparer = TakesAnEqualityComparer(node);
 		if (takesComparer && !IsTheDefaultComparer(node.Arguments[^1]))
@@ -1724,7 +1804,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	}
 
 	/// <summary><c>field.Any(predicate)</c> and <c>field.All(predicate)</c>, over one predicate on the element.</summary>
-	private bool TryVisitQuantifier(MethodCallExpression node, string name, int? positions)
+	private bool TryVisitQuantifier(MethodCallExpression node, string name, Positions? positions)
 	{
 		if (StripQuotes(node.Arguments[^1]) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
@@ -1974,10 +2054,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// Any(P) and All(P) over the values of a field. A negated predicate is pushed into
 	/// the quantifier, since Any(not P) is "not All(P)" and All(not P) is "not Any(P)".
-	/// With Take(n) on the field every predicate is read over the first n positions,
-	/// since that is what the quantifier ranges over; without it over the whole field.
+	/// With Take(n) on the field every predicate is read over the first n positions, and with
+	/// Take(range) over those of the range, since that is what the quantifier ranges over;
+	/// without it over the whole field.
 	/// </summary>
-	private void AppendQuantified(string name, bool all, ElementPredicate predicate, int? positions)
+	private void AppendQuantified(string name, bool all, ElementPredicate predicate, Positions? positions)
 	{
 		// "Any(not P)" is "not All(P)" and "All(not P)" is "not Any(P)": the negation
 		// moves onto the quantifier, which flips
@@ -1992,9 +2073,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			&& ResolvesToNull(predicate.Values[0]))
 			throw ComparisonWithNull(name);
 
-		if (positions is { } count)
+		if (positions is { } range)
 		{
-			AppendValuePattern(name, all: all, predicate, count);
+			AppendValuePattern(name, all: all, predicate, range);
 			return;
 		}
 
@@ -2174,14 +2255,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	};
 
 	/// <summary>
-	/// A predicate over the first <paramref name="positions"/> values of a field, as many
-	/// as Take(n) states. ES|QL applies a comparison or a scalar function to one value, not
+	/// A predicate over the <paramref name="positions"/> of a field that Take(n) or Take(range)
+	/// states. ES|QL applies a comparison or a scalar function to one value, not
 	/// to every value of a field at once, but MV_SLICE reads a value by position, so the
 	/// test is written out once per position and combined: any of them for Any, all of them
-	/// for All. A field holding more values is answered on its first ones, which is what
-	/// Take reads.
+	/// for All. A field holding more values is answered on the ones at those positions, which is
+	/// what Take reads.
 	/// </summary>
-	private void AppendValuePattern(string field, bool all, ElementPredicate predicate, int positions)
+	private void AppendValuePattern(string field, bool all, ElementPredicate predicate, Positions positions)
 	{
 		// All over an empty list holds only for the empty field; Any never does
 		if (predicate.Kind == ElementPredicateKind.In && predicate.Values.Count == 0)
@@ -2195,14 +2276,15 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		var rendered = predicate.Values.Select(TranslateText).ToList();
 
 		// the positions are one term of whatever encloses them
-		if (positions > 1)
+		if (positions.Count > 1)
 			_ = _builder.Append('(');
 
-		for (var position = 0; position < positions; position++)
+		for (var i = 0; i < positions.Count; i++)
 		{
-			if (position > 0)
+			if (i > 0)
 				_ = _builder.Append(all ? " AND " : " OR ");
 
+			var position = positions.First + i;
 			var value = $"MV_SLICE({field}, {position}, {position})";
 
 			// Past the last value MV_SLICE is null, and so would be the test, leaving
@@ -2219,7 +2301,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
 		}
 
-		if (positions > 1)
+		if (positions.Count > 1)
 			_ = _builder.Append(')');
 	}
 

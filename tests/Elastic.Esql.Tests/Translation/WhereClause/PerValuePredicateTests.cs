@@ -22,12 +22,12 @@ public class PerValuePredicateTests : EsqlTestBase
 		positions > 1 ? $"({string.Join(separator, terms)})" : string.Join(separator, terms);
 
 	/// <summary>Any: the test holds at some position; an absent value does not count.</summary>
-	private static string AnyOf(string field, Func<string, string> test, int positions = Positions) =>
-		Chain(Enumerable.Range(0, positions).Select(position => $"COALESCE({test(Slice(field, position))}, false)"), " OR ", positions);
+	private static string AnyOf(string field, Func<string, string> test, int positions = Positions, int first = 0) =>
+		Chain(Enumerable.Range(first, positions).Select(position => $"COALESCE({test(Slice(field, position))}, false)"), " OR ", positions);
 
 	/// <summary>All: the test holds at every position that has a value.</summary>
-	private static string AllOf(string field, Func<string, string> test, int positions = Positions) =>
-		Chain(Enumerable.Range(0, positions).Select(position =>
+	private static string AllOf(string field, Func<string, string> test, int positions = Positions, int first = 0) =>
+		Chain(Enumerable.Range(first, positions).Select(position =>
 		{
 			var value = Slice(field, position);
 			return $"COALESCE({value} IS NULL OR {test(value)}, true)";
@@ -888,84 +888,230 @@ public class PerValuePredicateTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_TakeOfARangeFromTheStart_ThrowsNotSupported()
+	public void Where_TakeOfARangeFromTheStart_ReadsItsPositions()
 	{
-		// Take(Range) takes two arguments as Take(int) does, and is told apart by its type; an
-		// expression tree takes no .. literal, so the range is built by a method
-		var query = CreateQuery<TaggedProduct>()
+		// Take(..4) is Take(4); an expression tree takes no .. literal, so the range is built by a method
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Range.EndAt(4)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void Where_TakeOfARangeWithBothEnds_ThrowsNotSupported()
+	public void Where_TakeOfARangeWithBothEndsFromTheStart_ReadsFromItsStart()
 	{
-		// the range is refused whatever its ends
-		var query = CreateQuery<TaggedProduct>()
+		// Take(1..3) reads the second and third values
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(new Range(0, 4)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+			.Where(p => p.Tags.Take(new Range(1, 3)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", positions: 2, first: 1)}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void Where_TakeOfARangeFromTheEnd_ThrowsNotSupported()
+	public void Where_TakeOfARangeFromTheEnd_ReadsTheLastPositions()
 	{
-		// the last values have no position counted from the start
-		var query = CreateQuery<TaggedProduct>()
+		// Take(^2..) reads the last two values, which MV_SLICE counts from -1
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(2))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(2))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", positions: 2, first: -2)}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void Where_TakeOfARangeWithAnyWithoutAPredicate_ThrowsNotSupported()
+	public void Where_AllOverARangeWithBothEndsFromTheEnd_ReadsThosePositions()
 	{
-		// the Take is read before the predicate, so an Any without one is refused alike
-		var query = CreateQuery<TaggedProduct>()
+		// Take(^3..^1) reads the third and second values from the end
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Range.EndAt(4)).Any());
+			.Where(p => p.Tags.Take(new Range(Index.FromEnd(3), Index.FromEnd(1))).All(t => t == "water"))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AllOf("tags", value => $"{value} == \"water\"", positions: 2, first: -3)}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void Where_TakeOfARangeWithContains_ThrowsNotSupported()
+	public void Where_TakeOfARangeWithContains_ReadsItsPositions()
 	{
 		// as for Any
-		var query = CreateQuery<TaggedProduct>()
+		var esql = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(Range.EndAt(4)).Contains("water"));
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Contains("water"))
+			.ToString();
 
-		var act = () => query.ToString();
-
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"{value} == \"water\"")}}
+            """.NativeLineEndings());
 	}
 
 	[Test]
-	public void Where_TakeOfACapturedRange_ThrowsNotSupported()
+	public void Where_TakeOfACapturedRange_ReadsItsPositions()
 	{
-		// a captured range is a range all the same
+		// a captured range is read when the query is translated, as a captured count is
 		var firstFour = ..4;
 
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(firstFour).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")")}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithoutAPredicateOverARangeFromTheFirstValue_IsTheFieldPresent()
+	{
+		// the first n values of a field are there as soon as it holds one
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(4)).Any())
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE tags IS NOT NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithoutAPredicateOverARangeToTheLastValue_IsTheFieldPresent()
+	{
+		// so are the last n
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(2))).Any())
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE tags IS NOT NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithoutAPredicateOverARangeFromTheSecondValue_TestsThatPosition()
+	{
+		// Take(1..3) holds a value when the field holds a second one
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(1, 3)).Any())
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE MV_SLICE(tags, 1, 1) IS NOT NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyWithoutAPredicateOverARangeBeforeTheLastValue_TestsItsLastPosition()
+	{
+		// Take(^3..^1) holds a value when the field holds a second one, counted from the end
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(Index.FromEnd(3), Index.FromEnd(1))).Any())
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE MV_SLICE(tags, -2, -2) IS NOT NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeOfARangeFromBothEnds_ThrowsNotSupported()
+	{
+		// Take(1..^1) reads positions that depend on how many values the field holds
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
-			.Where(p => p.Tags.Take(firstFour).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+			.Where(p => p.Tags.Take(new Range(1, Index.FromEnd(1))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Take with a range*count*Take(4)*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*one end from the first value and the other from the last*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeOpenAtTheEnd_ThrowsNotSupported()
+	{
+		// Take(2..) runs to the last value, wherever that is
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(2)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*one end from the first value and the other from the last*");
+	}
+
+	[Test]
+	public void Where_TakeOfAnEmptyRange_ThrowsNotSupported()
+	{
+		// Take(3..3) reads no value
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(3, 3)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads no position*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeAboveWhatElasticsearchParses_ThrowsNotSupported()
+	{
+		// as for a count above it
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(0, 300)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*at most 256*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeOfTheDocument_ThrowsNotSupported()
+	{
+		// a range read from the document is known only when the query runs
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(0, p.Tags.Length)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*known when the query is written*");
 	}
 
 	[Test]
@@ -1118,5 +1264,170 @@ public class PerValuePredicateTests : EsqlTestBase
 		var act = () => query.ToString();
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*Any over tags with a boolean known only when the query runs*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeOfIndicesFromTheStart_ReadsItsPositions()
+	{
+		// Index.FromStart is the explicit form of the int an index converts from
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(Index.FromStart(1), Index.FromStart(3))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", positions: 2, first: 1)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeOfARangeWithANegativeIndex_ThrowsNotSupported()
+	{
+		// Index.FromEnd(-1) throws in C#; it is no constant range to read positions from
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(-1))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*takes a constant range*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeOfConstructedIndicesFromTheEnd_ReadsThosePositions()
+	{
+		// an Index built with its constructor is read as one built by Index.FromEnd
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(new Index(3, fromEnd: true), new Index(1, fromEnd: true))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", positions: 2, first: -3)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeOfARangeOfACapturedIndex_ReadsItsPositions()
+	{
+		// a captured index is read when the query is translated, as a captured range is
+		var lastTwo = Index.FromEnd(2);
+
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(lastTwo)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			$$"""
+            FROM products
+            | WHERE {{AnyOf("tags", value => $"STARTS_WITH({value}, \"wat\")", positions: 2, first: -2)}}
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_TakeOfTheWholeRange_ThrowsNotSupported()
+	{
+		// Range.All is 0..^0, from the first value to past the last
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.All).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*one end from the first value and the other from the last*");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeFromTheStartToBeforeTheLast_ThrowsNotSupported()
+	{
+		// Range.EndAt(^1) is 0..^1, which reads all values but the last, however many there are
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.EndAt(Index.FromEnd(1))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*one end from the first value and the other from the last*");
+	}
+
+	[Test]
+	public void Where_TakeOfAReversedRangeFromTheStart_ThrowsNotSupported()
+	{
+		// Take(3..1) reads no value, as LINQ reads none
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(3, 1)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads no position*");
+	}
+
+	[Test]
+	public void Where_TakeOfAReversedRangeFromTheEnd_ThrowsNotSupported()
+	{
+		// Take(^1..^3) reads no value either
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(Index.FromEnd(1), Index.FromEnd(3))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*reads no position*");
+	}
+
+	[Test]
+	public void Where_TakeOfTheLargestRangeFromTheStart_IsAccepted()
+	{
+		// as many positions as Take(256) reads
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(1, 257)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Contain("MV_SLICE(tags, 256, 256)");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeFromTheStartAboveTheBound_ThrowsNotSupported()
+	{
+		// one position more than Take(256) reads
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(new Range(1, 258)).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*at most 256*");
+	}
+
+	[Test]
+	public void Where_TakeOfTheLargestRangeFromTheEnd_IsAccepted()
+	{
+		// the last 256 values
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(256))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Contain("MV_SLICE(tags, -256, -256)");
+	}
+
+	[Test]
+	public void Where_TakeOfARangeFromTheEndAboveTheBound_ThrowsNotSupported()
+	{
+		// the last 257 values are one position too many
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Take(Range.StartAt(Index.FromEnd(257))).Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*at most 256*");
 	}
 }
