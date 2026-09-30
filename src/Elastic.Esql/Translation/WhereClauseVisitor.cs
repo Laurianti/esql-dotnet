@@ -37,6 +37,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// the commands Elasticsearch does not allow MATCH after
 	private static readonly string[] CommandsBlockingMatch = ["FORK", "LIMIT", "STATS"];
 
+	// the only commands Elasticsearch allows QSTR after, besides the FROM that opens the query
+	private static readonly string[] CommandsAllowingQstr = ["SORT", "WHERE"];
+
 	// the collections of the base library that compare with default equality, the immutable
 	// ones by name since the netstandard2.0 build does not reference their assembly
 	private static readonly HashSet<Type> DefaultEqualityCollections =
@@ -66,9 +69,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// them instead of evaluating the same closure chain (and its getters) a second time.
 	private readonly Dictionary<Expression, object?> _resolvedCaptures = [];
 
-	// MATCH is emitted once per value of a captured collection, and the commands before the
-	// WHERE are the same for each: their position is checked once
-	private bool _matchPositionChecked;
+	// A full-text function is emitted once per value of a captured collection, and the commands
+	// before the WHERE are the same for each: their position is checked once per function
+	private readonly HashSet<string> _fullTextPositionsChecked = [];
 
 	private enum ElementPredicateKind
 	{
@@ -95,7 +98,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		_ = _builder.Clear();
 		_resolvedCaptures.Clear();
-		_matchPositionChecked = false;
+		_fullTextPositionsChecked.Clear();
 		_ = Visit(expression);
 		return _builder.ToString();
 	}
@@ -2051,7 +2054,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		// A shard whose index does not map the field answers the query with null rather than
 		// false, as for MATCH, so the field is required to be present
-		ThrowIfACommandBlocksMatch("QSTR");
+		ThrowIfACommandBlocksFullText("QSTR");
 		_ = _builder.Append('(').Append(name).Append(" IS NOT NULL AND QSTR(")
 			.Append(EsqlFormatting.FormatString(QueryStringFieldName(name) + ":" + pattern))
 			.Append("))");
@@ -2325,23 +2328,24 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// exact primitives, and replace this once they are generally available.
 	private void AppendMatch(string field, string renderedValue)
 	{
-		ThrowIfACommandBlocksMatch("MATCH");
+		ThrowIfACommandBlocksFullText("MATCH");
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
 	}
 
-	// Elasticsearch rejects MATCH after FORK, LIMIT and STATS, and would only say so when the
-	// query runs. MV_CONTAINS for equality and Contains, and MV_INTERSECTS for membership in a
-	// captured collection, lift this: both are evaluated per row rather than through the index,
+	// Elasticsearch rejects a full-text function after some commands, and would only say so when
+	// the query runs: MATCH after FORK, LIMIT and STATS, QSTR after anything but WHERE and SORT.
+	// MV_CONTAINS for equality and Contains, and MV_INTERSECTS for membership in a captured
+	// collection, lift this for MATCH: both are evaluated per row rather than through the index,
 	// so the position rule does not apply to them, and nothing is pushed to the index after
 	// those commands anyway. Both are still preview (9.2 and 9.4): the refusal stays until they
 	// are generally available, and this is the place to revisit then.
-	private void ThrowIfACommandBlocksMatch(string function)
+	private void ThrowIfACommandBlocksFullText(string function)
 	{
-		if (_matchPositionChecked)
+		if (!_fullTextPositionsChecked.Add(function))
 			return;
 
-		_matchPositionChecked = true;
-		var command = FindCommandBlockingMatch(_context.CommandsInThePipeline());
+		var commands = _context.CommandsInThePipeline();
+		var command = function == "QSTR" ? FindCommandBlockingQstr(commands) : FindCommandBlockingMatch(commands);
 
 		if (command is not null)
 		{
@@ -2373,6 +2377,31 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			.Split('|')
 			.Select(command => Array.Find(CommandsBlockingMatch, keyword => command.StartsWithCommand(keyword)))
 			.FirstOrDefault(keyword => keyword is not null);
+
+	/// <summary>
+	/// The first command other than the FROM, WHERE and SORT that Elasticsearch allows QSTR
+	/// after. The commands allowed are listed rather than the ones refused, so a command this
+	/// translation does not know is refused as well. A raw fragment is read command by command.
+	/// </summary>
+	private static string? FindCommandBlockingQstr(IEnumerable<QueryCommand> commands) =>
+		commands
+			.Select(command => command switch
+			{
+				FromCommand or SortCommand or WhereCommand => null,
+				LookupJoinCommand => "LOOKUP JOIN",
+				RawFragmentCommand raw => FindKeywordBlockingQstr(raw.Fragment),
+				_ => command.GetType().Name.Replace("Command", "").ToUpperInvariant()
+			})
+			.FirstOrDefault(command => command is not null);
+
+	// the first word of the first command in the fragment that is no WHERE or SORT
+	private static string? FindKeywordBlockingQstr(string fragment) =>
+		fragment
+			.Split('|')
+			.Select(command => command.Trim())
+			.Where(command => command.Length > 0 && !Array.Exists(CommandsAllowingQstr, keyword => command.StartsWithCommand(keyword)))
+			.Select(command => command.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[0].ToUpperInvariant())
+			.FirstOrDefault();
 
 	/// <summary>
 	/// MATCH over each value, any of them matching, with a document that has no values

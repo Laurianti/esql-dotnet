@@ -177,7 +177,7 @@ A predicate compared with `true` or `false` is written as the predicate or its n
 
 On a text-mapped field `MATCH` is an analyzed search rather than equality, so `Any(t => t == "water bottle")` also matches a document whose tags are `["water"]`. Map the field as a keyword where the distinction matters. `MV_CONTAINS` and `MV_INTERSECTS` are the exact primitives for this, in preview since 9.2 and 9.4; they replace `MATCH` here once they are generally available.
 
-Elasticsearch does not allow `MATCH` or `QSTR` after `FORK`, `LIMIT` or `STATS`, so a predicate that translates to either is refused after `Fork`, `GroupBy`, `Take` or a `RawEsql` fragment holding one of those commands, in a `Fork` branch that follows them as well, when the query is translated, rather than failing when it runs. Put the `Where` before them; `MV_CONTAINS` and `MV_INTERSECTS` lift this as well once they are generally available.
+Elasticsearch does not allow `MATCH` after `FORK`, `LIMIT` or `STATS`, so a predicate that translates to it is refused after `Fork`, `GroupBy`, `Take` or a `RawEsql` fragment holding one of those commands, in a `Fork` branch that follows them as well, when the query is translated, rather than failing when it runs. Put the `Where` before them; `MV_CONTAINS` and `MV_INTERSECTS` lift this as well once they are generally available.
 
 `Any` over `StartsWith`, `EndsWith` or `Contains` on the value is answered with one `QSTR`, a wildcard query on the field, which matches when any of its values does:
 
@@ -187,7 +187,7 @@ Elasticsearch does not allow `MATCH` or `QSTR` after `FORK`, `LIMIT` or `STATS`,
 .Where(p => p.Tags.Any(t => t.Contains("at")))     // WHERE (tags IS NOT NULL AND QSTR("tags:*at*"))
 ```
 
-The text and the field name are escaped for the query string syntax, where a field name is not quoted with backticks, and the text has to be known when the query is written, since `QSTR` takes its query as a literal. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
+The text and the field name are escaped for the query string syntax, where a field name is not quoted with backticks, and the text has to be known when the query is written, since `QSTR` takes its query as a literal. `QSTR` is stricter than `MATCH` about where it sits: Elasticsearch allows it only after `FROM`, `WHERE` and `SORT`, so after a `Select`, `Keep`, `Drop`, `Take`, `GroupBy`, `Fork`, `LookupJoin`, `Completion`, or a `RawEsql` fragment with any other command, it is refused when the query is translated. Put the `Where` first. A leading wildcard, which `EndsWith` and `Contains` need, is slower than a trailing one. On a keyword field the test is ordinal, as in C#; on a text-mapped field the wildcard is matched against the analyzed terms, as `MATCH` is, so map the field as a keyword where the distinction matters.
 
 `All` over such a test, or `Any` over its negation, has no answer over the field as a whole: `QSTR` answers whether some value passes it, not whether every value does. It needs the field read position by position. How many positions to read is stated with `Take(n)` on the field, which already means "the first n" in LINQ. Each position is read with `MV_SLICE` and tested on its own:
 
