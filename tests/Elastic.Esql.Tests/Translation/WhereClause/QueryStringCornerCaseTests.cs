@@ -831,4 +831,32 @@ public class QueryStringCornerCaseTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*tags with null*");
 	}
+
+	[Test]
+	public void Where_AnyStartsWithACapturedText_ReadsItOnce()
+	{
+		// the null check and QSTR share the value read, as every captured value is read once
+		var holder = new CountingValue<string>("wat");
+
+		_ = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(holder.Value, StringComparison.Ordinal)))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
+
+	[Test]
+	public void Where_AnyStartsWithACapturedChar_ReadsItOnce()
+	{
+		// as for a string
+		var holder = new CountingValue<char>('w');
+
+		_ = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(holder.Value)))
+			.ToString();
+
+		_ = holder.Reads.Should().Be(1);
+	}
 }

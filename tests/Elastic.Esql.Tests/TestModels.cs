@@ -988,3 +988,18 @@ public class FlatDotFallbackModel
 
 	public string Name { get; set; } = string.Empty;
 }
+
+/// <summary>A captured value that counts how many times the translation reads it.</summary>
+public sealed class CountingValue<T>(T value)
+{
+	public int Reads { get; private set; }
+
+	public T Value
+	{
+		get
+		{
+			Reads++;
+			return value;
+		}
+	}
+}
