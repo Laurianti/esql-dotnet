@@ -2,6 +2,8 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Text;
+
 namespace Elastic.Esql.Formatting;
 
 /// <summary>
@@ -58,6 +60,52 @@ public static class EsqlIdentifier
 			segments[i] = EscapeColumnSegment(segments[i]);
 
 		return string.Join(".", segments);
+	}
+
+	/// <summary>
+	/// The segments of a column path as <see cref="EscapeColumnName"/> renders it, each read back
+	/// as it is named in the mapping: a backtick-quoted segment loses its quotes, and a doubled
+	/// backtick inside it is one backtick of the name.
+	/// </summary>
+	internal static IReadOnlyList<string> SplitColumnName(string escapedPath)
+	{
+		var segments = new List<string>();
+		var segment = new StringBuilder();
+
+		for (var i = 0; i < escapedPath.Length; i++)
+		{
+			switch (escapedPath[i])
+			{
+				// a quoted segment runs to the next single backtick
+				case '`':
+					for (i++; i < escapedPath.Length; i++)
+					{
+						if (escapedPath[i] == '`')
+						{
+							if (i + 1 < escapedPath.Length && escapedPath[i + 1] == '`')
+								i++;
+							else
+								break;
+						}
+
+						_ = segment.Append(escapedPath[i]);
+					}
+
+					break;
+
+				case '.':
+					segments.Add(segment.ToString());
+					_ = segment.Clear();
+					break;
+
+				default:
+					_ = segment.Append(escapedPath[i]);
+					break;
+			}
+		}
+
+		segments.Add(segment.ToString());
+		return segments;
 	}
 
 	private static string EscapeColumnSegment(string segment) =>

@@ -80,6 +80,48 @@ internal static class TranslationExtensions
 	}
 
 	/// <summary>
+	/// The commands of a raw ES|QL fragment, split at the pipes that separate them. A pipe inside
+	/// a string, triple-quoted or with its escapes, or inside a backtick-quoted name, is part of it.
+	/// </summary>
+	public static IEnumerable<string> SplitCommands(this string fragment)
+	{
+		var start = 0;
+
+		for (var i = 0; i < fragment.Length; i++)
+		{
+			switch (fragment[i])
+			{
+				case '"' when string.CompareOrdinal(fragment, i, "\"\"\"", 0, 3) == 0:
+					var close = fragment.IndexOf("\"\"\"", i + 3, StringComparison.Ordinal);
+					i = close < 0 ? fragment.Length : close + 2;
+					break;
+
+				case '"':
+					for (i++; i < fragment.Length && fragment[i] != '"'; i++)
+					{
+						if (fragment[i] == '\\')
+							i++;
+					}
+
+					break;
+
+				// a doubled backtick inside a quoted name reads as a closing and an opening one
+				case '`':
+					var end = fragment.IndexOf('`', i + 1);
+					i = end < 0 ? fragment.Length : end;
+					break;
+
+				case '|':
+					yield return fragment.Substring(start, i - start);
+					start = i + 1;
+					break;
+			}
+		}
+
+		yield return fragment.Substring(start);
+	}
+
+	/// <summary>
 	/// Resolves a field name from an expression, handling plain member access and <c>MultiField()</c> calls.
 	/// Returned paths are ES|QL-escaped per segment via <see cref="EsqlIdentifier.EscapeColumnName"/>.
 	/// </summary>

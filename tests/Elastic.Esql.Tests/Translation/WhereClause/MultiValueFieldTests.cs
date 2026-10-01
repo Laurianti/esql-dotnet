@@ -18,6 +18,8 @@ namespace Elastic.Esql.Tests.Translation.WhereClause;
 /// </summary>
 public class MultiValueFieldTests : EsqlTestBase
 {
+	private static readonly string Prefix = "wat";
+
 	[Test]
 	public void Where_AnyWithEquality_TranslatesToMatch()
 	{
@@ -449,17 +451,143 @@ public class MultiValueFieldTests : EsqlTestBase
 	}
 
 	[Test]
-	public void Where_AnyWithAPerValuePredicate_ThrowsNotSupported()
+	public void Where_AnyStartsWith_TranslatesToQstr()
 	{
-		// StartsWith holds for one value at a time, which needs the field read position by
-		// position, and no function reads the field that way
+		// a wildcard query on the field matches when any of its values does
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyEndsWith_TranslatesToQstr()
+	{
+		// the wildcard leads, which the query string syntax allows
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.EndsWith("al", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*al", {"allow_leading_wildcard": true}))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyContainingAText_TranslatesToQstr()
+	{
+		// a wildcard on either side
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.Contains("at")))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:*at*", {"allow_leading_wildcard": true}))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithReservedCharacters_EscapesThem()
+	{
+		// every character the query string syntax reserves is escaped, whitespace included,
+		// and then the whole query is escaped as an ES|QL string
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith("a b*c\"d\\e:f", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:a\\ b\\*c\\\"d\\\\e\\:f*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_NegatedAnyStartsWith_StaysDefinite()
+	{
+		// the field is required to be present, as for MATCH, so NOT keeps a definite answer
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => !p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE NOT (tags IS NOT NULL AND QSTR("tags:wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithACapturedValue_StaysInline()
+	{
+		// QSTR takes its query as a literal
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.Any(t => t.StartsWith(Prefix, StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags IS NOT NULL AND QSTR("tags:wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AnyStartsWithOverAMultiField_NamesItsPath()
+	{
+		// the dots of the path are part of the field name
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Where(p => p.Tags.MultiField("keyword").Any(t => t.StartsWith("wat", StringComparison.Ordinal)))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM products
+            | WHERE (tags.keyword IS NOT NULL AND QSTR("tags.keyword:wat*"))
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Where_AllStartsWith_ThrowsNotSupported()
+	{
+		// QSTR answers whether some value passes the test, not whether every value does
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
+			.Where(p => p.Tags.All(t => t.StartsWith("wat", StringComparison.Ordinal)));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*every value of tags must pass*Take(n)*");
+	}
+
+	[Test]
+	public void Where_AnyStartsWithAfterTake_ThrowsNotSupported()
+	{
+		// Elasticsearch does not allow QSTR after LIMIT, as it does not allow MATCH
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.Take(10)
 			.Where(p => p.Tags.Any(t => t.StartsWith("wat", StringComparison.Ordinal)));
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT: it translates to QSTR*");
 	}
 
 	[Test]
@@ -890,14 +1018,14 @@ public class MultiValueFieldTests : EsqlTestBase
 	[Test]
 	public void Where_AnyStartingWithAField_ThrowsNotSupported()
 	{
-		// the test holds for one value at a time, whatever the value it is given
+		// QSTR takes its query as a literal, which a field is not
 		var query = CreateQuery<TaggedProduct>()
 			.From("products")
 			.Where(p => p.Tags.Any(t => t.StartsWith(p.Name, StringComparison.Ordinal)));
 
 		var act = () => query.ToString();
 
-		_ = act.Should().Throw<NotSupportedException>().WithMessage("*individual values of tags*");
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*text test over the values of tags*string known*");
 	}
 
 	[Test]
@@ -1770,5 +1898,31 @@ public class MultiValueFieldTests : EsqlTestBase
 				return value;
 			}
 		}
+	}
+
+	[Test]
+	public void Where_ContainsAfterARawWhereHoldingALimitInAString_TranslatesToMatch()
+	{
+		// the LIMIT is inside a string, not a command of the fragment
+		var esql = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("WHERE name != \"x|limit 1\"")
+			.Where(p => p.Tags.Contains("iot"))
+			.ToString();
+
+		_ = esql.Should().EndWith("| WHERE (tags IS NOT NULL AND MATCH(tags, \"iot\"))");
+	}
+
+	[Test]
+	public void Where_ContainsAfterARawWhereAndALimit_ThrowsNotSupported()
+	{
+		var query = CreateQuery<TaggedProduct>()
+			.From("products")
+			.RawEsql("WHERE name != \"x|y\" | LIMIT 5")
+			.Where(p => p.Tags.Contains("iot"));
+
+		var act = () => query.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*after LIMIT*");
 	}
 }

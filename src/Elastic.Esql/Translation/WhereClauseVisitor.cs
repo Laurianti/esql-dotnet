@@ -27,14 +27,21 @@ namespace Elastic.Esql.Translation;
 internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : ExpressionVisitor
 {
 	/// <summary>
-	/// How many values of a collection an Any over it may test, each with its own MATCH.
-	/// Each one adds a level to the expression Elasticsearch parses, and it stops
-	/// accepting them past this.
+	/// How many terms a multi-value predicate may join: the positions Take(n) reads, or the
+	/// values of a captured collection that MATCH tests one at a time. Each one adds a level to
+	/// the expression Elasticsearch parses, and it stops accepting them past this; the values
+	/// of one IN add none.
 	/// </summary>
-	private const int MaxMatchedValues = 256;
+	private const int MaxPredicateTerms = 256;
 
 	// the commands Elasticsearch does not allow MATCH after
 	private static readonly string[] CommandsBlockingMatch = ["FORK", "LIMIT", "STATS"];
+
+	// the only commands Elasticsearch allows QSTR after, besides the FROM that opens the query
+	private static readonly string[] CommandsAllowingQstr = ["SORT", "WHERE"];
+
+	// the characters the query string syntax reserves, each escaped with a backslash inside QSTR
+	private static readonly HashSet<char> QueryStringReserved = [.. "+-=&|><!(){}[]^\"~*?:\\/"];
 
 	// the collections of the base library that compare with default equality, the immutable
 	// ones by name since the netstandard2.0 build does not reference their assembly
@@ -65,9 +72,9 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// them instead of evaluating the same closure chain (and its getters) a second time.
 	private readonly Dictionary<Expression, object?> _resolvedCaptures = [];
 
-	// MATCH is emitted once per value of a captured collection, and the commands before the
-	// WHERE are the same for each: their position is checked once
-	private bool _matchPositionChecked;
+	// A full-text function is emitted once per value of a captured collection, and the commands
+	// before the WHERE are the same for each: their position is checked once per function
+	private readonly HashSet<string> _fullTextPositionsChecked = [];
 
 	private enum ElementPredicateKind
 	{
@@ -94,7 +101,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		_ = _builder.Clear();
 		_resolvedCaptures.Clear();
-		_matchPositionChecked = false;
+		_fullTextPositionsChecked.Clear();
 		_ = Visit(expression);
 		return _builder.ToString();
 	}
@@ -1511,11 +1518,14 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (source is null)
 			return false;
 
+		source = StripTake(source, out var take);
+		var positions = take is null ? (int?)null : PositionsTaken(take);
 		ThrowIfNotAField(node.Method.Name, source);
 		ThrowIfTheValuesCannotBeCompared(node.Method.Name, source);
 		var name = ResolveMultiValueField(source);
 
-		// field.Any() with no predicate: the field simply has to hold a value
+		// field.Any() with no predicate: the field simply has to hold a value, and among its
+		// first n values as soon as it holds one at all
 		if (node.Method.Name == "Any" && node.Arguments.Count == (node.Method.IsStatic ? 1 : 0))
 		{
 			// LINQ reads a missing field as an empty sequence, where Any() is false; an empty
@@ -1526,8 +1536,52 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		return node.Method.Name == "Contains"
-			? TryVisitFieldContains(node, source, name)
-			: TryVisitQuantifier(node, name);
+			? TryVisitFieldContains(node, source, name, positions)
+			: TryVisitQuantifier(node, name, positions);
+	}
+
+	/// <summary>
+	/// The field a predicate reads, with <c>field.Take(n)</c> moved onto the field itself and
+	/// handed back in <paramref name="take"/>, unchecked; the source as it is when it is no Take.
+	/// "field.Take(n).Any(p)" means "any of the first n", which is what reading the field
+	/// position by position computes, so the bound belongs to the one predicate that states it.
+	/// </summary>
+	private static Expression StripTake(Expression source, out MethodCallExpression? take)
+	{
+		take = source is MethodCallExpression { Method.Name: nameof(Enumerable.Take), Arguments.Count: 2 } call
+			&& call.Method.DeclaringType == typeof(Enumerable)
+				? call
+				: null;
+
+		return take?.Arguments[0] ?? source;
+	}
+
+	/// <summary>The count of a <c>field.Take(n)</c>, refused when it is no count Elasticsearch can read.</summary>
+	private static int PositionsTaken(MethodCallExpression take)
+	{
+		// Take(Range) has two arguments as well; by name, since netstandard2.0 has no System.Range
+		if (take.Arguments[1].Type.FullName == "System.Range")
+		{
+			throw new NotSupportedException(
+				"Take with a range on a multi-value field is not supported: the positions read are stated "
+				+ "with a count from the first value, as in Take(4).");
+		}
+
+		if (!TryGetConstant(take.Arguments[1], out var taken) || taken is not int count || count < 1)
+		{
+			throw new NotSupportedException(
+				"Take on a multi-value field takes a constant count of at least one: the number of "
+				+ "positions to read has to be fixed when the query is written.");
+		}
+
+		if (count > MaxPredicateTerms)
+		{
+			throw new NotSupportedException(
+				$"Take({count}) on a multi-value field is not supported: each position adds a level "
+				+ $"to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
+		}
+
+		return count;
 	}
 
 	/// <summary>
@@ -1552,8 +1606,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		if (!TryGetConstant(predicate == left ? right : left, out var value) || value is not bool flag)
 		{
+			// the Take is not checked here: the boolean is what this refusal explains
+			var source = StripTake(TryGetMultiValueSource(predicate)!, out _);
+
 			throw new NotSupportedException(
-				$"Comparing {predicate.Method.Name} over {ResolveMultiValueField(TryGetMultiValueSource(predicate)!)} with a boolean "
+				$"Comparing {predicate.Method.Name} over {ResolveMultiValueField(source)} with a boolean "
 				+ "known only when the query runs is not supported: Elasticsearch takes neither MATCH nor IS NOT NULL as an "
 				+ "operand of a comparison. Compare with true or false, or write the predicate, negated with ! where needed.");
 		}
@@ -1651,7 +1708,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// answered as that. An overload taking a comparer other than the default asks for a
 	/// comparison the translation cannot honour.
 	/// </summary>
-	private bool TryVisitFieldContains(MethodCallExpression node, Expression source, string name)
+	private bool TryVisitFieldContains(MethodCallExpression node, Expression source, string name, int? positions)
 	{
 		var takesComparer = TakesAnEqualityComparer(node);
 		if (takesComparer && !IsTheDefaultComparer(node.Arguments[^1]))
@@ -1662,12 +1719,12 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 			return false;
 
 		var compared = GetComparedValue(node.Arguments[valueIndex], ElementType(source.Type), name);
-		AppendQuantified(name, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false));
+		AppendQuantified(name, all: false, new ElementPredicate(ElementPredicateKind.Equal, [compared], Negated: false), positions);
 		return true;
 	}
 
 	/// <summary><c>field.Any(predicate)</c> and <c>field.All(predicate)</c>, over one predicate on the element.</summary>
-	private bool TryVisitQuantifier(MethodCallExpression node, string name)
+	private bool TryVisitQuantifier(MethodCallExpression node, string name, int? positions)
 	{
 		if (StripQuotes(node.Arguments[^1]) is not LambdaExpression { Parameters.Count: 1 } lambda)
 			return false;
@@ -1676,7 +1733,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		if (predicate is null)
 			return false;
 
-		AppendQuantified(name, all: node.Method.Name == "All", predicate.Value);
+		AppendQuantified(name, all: node.Method.Name == "All", predicate.Value, positions);
 		return true;
 	}
 
@@ -1871,7 +1928,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static ElementPredicate? TryParseElementCall(MethodCallExpression call, ParameterExpression element, string field, bool negated)
 	{
 		// x.StartsWith("a"), x.EndsWith("a"), x.Contains("a"), with or without a
-		// StringComparison and whatever the value: either way the test holds for one value at a time
+		// StringComparison and whatever the value: either way the test holds for one value at a
+		// time, and only an ordinal one can be honoured, as for a single field
 		if (call.Object == element
 			&& call.Method.DeclaringType == typeof(string)
 			&& (call.Arguments.Count == 1
@@ -1879,6 +1937,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			if (!TryGetTextPredicateKind(call.Method.Name, out var kind))
 				return null;
+
+			EsqlFunctionTranslator.ThrowIfUnsupportedStringComparison(call);
 
 			return new ElementPredicate(kind, [call.Arguments[0]], Negated: negated);
 		}
@@ -1914,8 +1974,10 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// <summary>
 	/// Any(P) and All(P) over the values of a field. A negated predicate is pushed into
 	/// the quantifier, since Any(not P) is "not All(P)" and All(not P) is "not Any(P)".
+	/// With Take(n) on the field every predicate is read over the first n positions,
+	/// since that is what the quantifier ranges over; without it over the whole field.
 	/// </summary>
-	private void AppendQuantified(string name, bool all, ElementPredicate predicate)
+	private void AppendQuantified(string name, bool all, ElementPredicate predicate, int? positions)
 	{
 		// "Any(not P)" is "not All(P)" and "All(not P)" is "not Any(P)": the negation
 		// moves onto the quantifier, which flips
@@ -1923,6 +1985,17 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		{
 			_ = _builder.Append("NOT ");
 			all = !all;
+		}
+
+		// "abc".StartsWith(null) throws, and a stored value is never null
+		if (predicate.Kind is ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains
+			&& ResolvesToNull(predicate.Values[0]))
+			throw ComparisonWithNull(name);
+
+		if (positions is { } count)
+		{
+			AppendValuePattern(name, all: all, predicate, count);
+			return;
 		}
 
 		switch (predicate.Kind)
@@ -1940,12 +2013,88 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				AppendOrdering(name, all, predicate);
 				break;
 
-			// StartsWith and the rest test one value at a time, which needs the field read
-			// position by position: the shape is refused rather than answered by a test that
-			// reads the whole field.
+			// some value starts with, ends with or contains a text: a full-text function matches
+			// when any value does, as MATCH does for equality
+			case ElementPredicateKind.StartsWith or ElementPredicateKind.EndsWith or ElementPredicateKind.Contains when !all:
+				AppendQueryString(name, predicate);
+				break;
+
+			// every value passing a text test has no answer over the field as a whole: it needs
+			// the field read position by position, and how many positions is what Take(n) states
 			default:
-				throw PredicateOverIndividualValues(name);
+				throw new NotSupportedException(
+					$"A predicate that every value of {name} must pass, or that some value must fail, is not "
+					+ "supported without a bound for a test such as StartsWith, which holds for one value at a "
+					+ "time: QSTR answers whether some value passes it, and every value passing it needs the "
+					+ "field read position by position. State how many with Take(n) on the field, as in "
+					+ "Tags.Take(4).All(t => t.StartsWith(\"wat\")).");
 		}
+	}
+
+	/// <summary>
+	/// Any over StartsWith, EndsWith or Contains, answered with one QSTR: a wildcard query on the
+	/// field matches when any of its values does, so there are no positions and no bound. The
+	/// text is escaped for the query string syntax, and has to be known when the query is
+	/// written, since QSTR takes its query as a literal.
+	/// </summary>
+	private void AppendQueryString(string name, ElementPredicate predicate)
+	{
+		if (!TryGetConstant(predicate.Values[0], out var constant) || constant is null)
+		{
+			throw new NotSupportedException(
+				$"A text test over the values of {name} takes a string known when the query is written: "
+				+ "it translates to QSTR, whose query is a literal.");
+		}
+
+		// a string, or a char, as in StartsWith('w'), which is the one-character string
+		var escaped = EscapeQueryString(constant is char character ? character.ToString() : (string)constant);
+		var pattern = predicate.Kind switch
+		{
+			ElementPredicateKind.StartsWith => escaped + "*",
+			ElementPredicateKind.EndsWith => "*" + escaped,
+			_ => "*" + escaped + "*"
+		};
+
+		// A shard whose index does not map the field answers the query with null rather than
+		// false, as for MATCH, so the field is required to be present
+		ThrowIfACommandBlocksFullText("QSTR");
+		_ = _builder.Append('(').Append(name).Append(" IS NOT NULL AND QSTR(")
+			.Append(EsqlFormatting.FormatString(QueryStringFieldName(name) + ":" + pattern));
+
+		// EndsWith and Contains lead with a wildcard, which a cluster may disallow in query strings
+		// (indices.query.query_string.allowLeadingWildcard) and would refuse only when the query runs:
+		// the option allows it for this query. QSTR takes options from 9.1, where it is generally available.
+		if (predicate.Kind is not ElementPredicateKind.StartsWith)
+			_ = _builder.Append(", {\"allow_leading_wildcard\": true}");
+
+		_ = _builder.Append("))");
+	}
+
+	/// <summary>
+	/// The field as the query string syntax names it. <paramref name="name"/> is the ES|QL path,
+	/// whose segments are backtick-quoted where ES|QL needs it: each segment is read back as it
+	/// is named in the mapping and escaped for the query string instead, where a backtick means
+	/// nothing and a bare AND, OR or NOT is an operator.
+	/// </summary>
+	private static string QueryStringFieldName(string name) =>
+		string.Join(".", EsqlIdentifier.SplitColumnName(name)
+			.Select(segment => segment is "AND" or "OR" or "NOT" ? "\\" + segment : EscapeQueryString(segment)));
+
+	// Every character the query string syntax reserves, whitespace included, is escaped with a
+	// backslash
+	private static string EscapeQueryString(string value)
+	{
+		var builder = new StringBuilder(value.Length);
+
+		foreach (var character in value)
+		{
+			if (QueryStringReserved.Contains(character) || char.IsWhiteSpace(character))
+				_ = builder.Append('\\');
+
+			_ = builder.Append(character);
+		}
+
+		return builder.ToString();
 	}
 
 	/// <summary>Any and All over equality with one value.</summary>
@@ -1985,11 +2134,11 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 		}
 
 		// each value adds one level to the expression
-		if (predicate.Values.Count > MaxMatchedValues)
+		if (predicate.Values.Count > MaxPredicateTerms)
 		{
 			throw new NotSupportedException(
 				$"A collection of {predicate.Values.Count} values is not supported here: each value adds "
-				+ $"a level to the expression Elasticsearch parses, and at most {MaxMatchedValues} fit.");
+				+ $"a level to the expression Elasticsearch parses, and at most {MaxPredicateTerms} fit.");
 		}
 
 		AppendPresentMatches(name, [.. predicate.Values.Select(TranslateSubExpression)]);
@@ -2003,13 +2152,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	{
 		var upper = predicate.Kind is ElementPredicateKind.GreaterThan or ElementPredicateKind.GreaterThanOrEqual;
 		var aggregate = all == upper ? "MV_MIN" : "MV_MAX";
-		var op = predicate.Kind switch
-		{
-			ElementPredicateKind.GreaterThan => ">",
-			ElementPredicateKind.GreaterThanOrEqual => ">=",
-			ElementPredicateKind.LessThan => "<",
-			_ => "<="
-		};
+		var op = ComparisonOperator(predicate.Kind);
 
 		// MV_MIN and MV_MAX are null over a missing field, and so would be the
 		// whole predicate, which then answers neither true nor false. A missing
@@ -2019,6 +2162,102 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 
 		_ = _builder.Append(aggregate).Append('(').Append(name).Append(") ").Append(op).Append(' ')
 			.Append(TranslateSubExpression(predicate.Values[0])).Append(')');
+	}
+
+	private static string ComparisonOperator(ElementPredicateKind kind) => kind switch
+	{
+		ElementPredicateKind.Equal => "==",
+		ElementPredicateKind.GreaterThan => ">",
+		ElementPredicateKind.GreaterThanOrEqual => ">=",
+		ElementPredicateKind.LessThan => "<",
+		_ => "<="
+	};
+
+	/// <summary>
+	/// A predicate over the first <paramref name="positions"/> values of a field, as many
+	/// as Take(n) states. ES|QL applies a comparison or a scalar function to one value, not
+	/// to every value of a field at once, but MV_SLICE reads a value by position, so the
+	/// test is written out once per position and combined: any of them for Any, all of them
+	/// for All. A field holding more values is answered on its first ones, which is what
+	/// Take reads.
+	/// </summary>
+	private void AppendValuePattern(string field, bool all, ElementPredicate predicate, int positions)
+	{
+		// All over an empty list holds only for the empty field; Any never does
+		if (predicate.Kind == ElementPredicateKind.In && predicate.Values.Count == 0)
+		{
+			_ = _builder.Append(all ? field + " IS NULL" : "false");
+			return;
+		}
+
+		// Rendered once, before the positions, so a captured value becomes one parameter
+		// rather than one per position
+		var rendered = predicate.Values.Select(TranslateText).ToList();
+
+		// the positions are one term of whatever encloses them
+		if (positions > 1)
+			_ = _builder.Append('(');
+
+		for (var position = 0; position < positions; position++)
+		{
+			if (position > 0)
+				_ = _builder.Append(all ? " AND " : " OR ");
+
+			var value = $"MV_SLICE({field}, {position}, {position})";
+
+			// Past the last value MV_SLICE is null, and so would be the test, leaving
+			// the whole predicate undefined instead of answering either way. An absent
+			// value satisfies All and does not satisfy Any, so it is spelled out: the
+			// result then stays definite under an enclosing NOT.
+			_ = _builder.Append("COALESCE(");
+
+			if (all)
+				_ = _builder.Append(value).Append(" IS NULL OR ");
+
+			AppendValuePredicate(value, predicate.Kind, rendered);
+
+			_ = _builder.Append(", ").Append(all ? "true" : "false").Append(')');
+		}
+
+		if (positions > 1)
+			_ = _builder.Append(')');
+	}
+
+	/// <summary>
+	/// The test on one value. A comparison is made on the value as it is stored, so any
+	/// type ES|QL compares is read the same way; a text predicate reads a string.
+	/// </summary>
+	private void AppendValuePredicate(string value, ElementPredicateKind kind, IReadOnlyList<string> rendered) =>
+		_ = _builder.Append(kind switch
+		{
+			// LOCATE is 1-based and 0 when the text is absent; it finds the empty string at 1,
+			// as "abc".Contains("") holds
+			ElementPredicateKind.Contains => $"LOCATE({value}, {rendered[0]}) > 0",
+			ElementPredicateKind.EndsWith => $"ENDS_WITH({value}, {rendered[0]})",
+			// one IN per position, which adds one level to the expression whatever the count of values
+			ElementPredicateKind.In => $"{value} IN ({string.Join(", ", rendered)})",
+			ElementPredicateKind.StartsWith => $"STARTS_WITH({value}, {rendered[0]})",
+			_ => $"{value} {ComparisonOperator(kind)} {rendered[0]}"
+		});
+
+	/// <summary>
+	/// A value a text test compares with, rendered as the string it stands for. A char is the
+	/// one-character string: a literal one is written as that string, and a captured one stays a
+	/// parameter under its own name, holding the string rather than a char, which the serializer
+	/// may have no contract for.
+	/// </summary>
+	private string TranslateText(Expression value)
+	{
+		if (value.Type != typeof(char) || !TryGetConstant(value, out var constant) || constant is not char character)
+			return TranslateSubExpression(value);
+
+		if (value is MemberExpression member && member.Expression.IsClosureRooted())
+		{
+			_resolvedCaptures[member] = character.ToString();
+			return TranslateSubExpression(member);
+		}
+
+		return EsqlFormatting.FormatString(character.ToString());
 	}
 
 	/// <summary>
@@ -2097,28 +2336,29 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// exact primitives, and replace this once they are generally available.
 	private void AppendMatch(string field, string renderedValue)
 	{
-		ThrowIfACommandBlocksMatch();
+		ThrowIfACommandBlocksFullText("MATCH");
 		_ = _builder.Append("MATCH(").Append(field).Append(", ").Append(renderedValue).Append(')');
 	}
 
-	// Elasticsearch rejects MATCH after FORK, LIMIT and STATS, and would only say so when the
-	// query runs. MV_CONTAINS for equality and Contains, and MV_INTERSECTS for membership in a
-	// captured collection, lift this: both are evaluated per row rather than through the index,
+	// Elasticsearch rejects a full-text function after some commands, and would only say so when
+	// the query runs: MATCH after FORK, LIMIT and STATS, QSTR after anything but WHERE and SORT.
+	// MV_CONTAINS for equality and Contains, and MV_INTERSECTS for membership in a captured
+	// collection, lift this for MATCH: both are evaluated per row rather than through the index,
 	// so the position rule does not apply to them, and nothing is pushed to the index after
 	// those commands anyway. Both are still preview (9.2 and 9.4): the refusal stays until they
 	// are generally available, and this is the place to revisit then.
-	private void ThrowIfACommandBlocksMatch()
+	private void ThrowIfACommandBlocksFullText(string function)
 	{
-		if (_matchPositionChecked)
+		if (!_fullTextPositionsChecked.Add(function))
 			return;
 
-		_matchPositionChecked = true;
-		var command = FindCommandBlockingMatch(_context.CommandsInThePipeline());
+		var commands = _context.CommandsInThePipeline();
+		var command = function == "QSTR" ? FindCommandBlockingQstr(commands) : FindCommandBlockingMatch(commands);
 
 		if (command is not null)
 		{
 			throw new NotSupportedException(
-				$"A predicate on a multi-value field is not supported after {command}: it translates to MATCH, "
+				$"A predicate on a multi-value field is not supported after {command}: it translates to {function}, "
 				+ $"which Elasticsearch does not allow after {command}.");
 		}
 	}
@@ -2142,9 +2382,34 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	// a fragment may hold several commands joined with the pipe
 	private static string? FindKeywordBlockingMatch(string fragment) =>
 		fragment
-			.Split('|')
+			.SplitCommands()
 			.Select(command => Array.Find(CommandsBlockingMatch, keyword => command.StartsWithCommand(keyword)))
 			.FirstOrDefault(keyword => keyword is not null);
+
+	/// <summary>
+	/// The first command other than the FROM, WHERE and SORT that Elasticsearch allows QSTR
+	/// after. The commands allowed are listed rather than the ones refused, so a command this
+	/// translation does not know is refused as well. A raw fragment is read command by command.
+	/// </summary>
+	private static string? FindCommandBlockingQstr(IEnumerable<QueryCommand> commands) =>
+		commands
+			.Select(command => command switch
+			{
+				FromCommand or SortCommand or WhereCommand => null,
+				LookupJoinCommand => "LOOKUP JOIN",
+				RawFragmentCommand raw => FindKeywordBlockingQstr(raw.Fragment),
+				_ => command.GetType().Name.Replace("Command", "").ToUpperInvariant()
+			})
+			.FirstOrDefault(command => command is not null);
+
+	// the first word of the first command in the fragment that is no WHERE or SORT
+	private static string? FindKeywordBlockingQstr(string fragment) =>
+		fragment
+			.SplitCommands()
+			.Select(command => command.Trim())
+			.Where(command => command.Length > 0 && !Array.Exists(CommandsAllowingQstr, keyword => command.StartsWithCommand(keyword)))
+			.Select(command => command.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries)[0].ToUpperInvariant())
+			.FirstOrDefault();
 
 	/// <summary>
 	/// MATCH over each value, any of them matching, with a document that has no values
