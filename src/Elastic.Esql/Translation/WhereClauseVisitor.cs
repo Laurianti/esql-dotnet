@@ -1578,9 +1578,8 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	/// </summary>
 	private static Positions PositionsTaken(MethodCallExpression take)
 	{
-		// Take(Range) has two arguments as well; by name, since netstandard2.0 has no System.Range
-		// of its own
-		if (take.Arguments[1].Type.FullName == "System.Range")
+		// Take(Range) has two arguments as well
+		if (IsRangeType(take.Arguments[1].Type))
 			return PositionsOfRange(take.Arguments[1]);
 
 		if (!TryGetConstant(take.Arguments[1], out var taken) || taken is not int count || count < 1)
@@ -1648,7 +1647,7 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 	private static object? ResolveRangePart(Expression expression) => expression switch
 	{
 		MethodCallExpression { Object: null, Arguments.Count: 1 } call
-			when call.Method.DeclaringType == typeof(Range) || call.Method.DeclaringType == typeof(Index) =>
+			when IsRangeType(call.Method.DeclaringType) || IsIndexType(call.Method.DeclaringType) =>
 			(call.Method.Name, ResolveRangePart(call.Arguments[0])) switch
 			{
 				(nameof(Range.StartAt), Index start) => Range.StartAt(start),
@@ -1658,16 +1657,49 @@ internal sealed class WhereClauseVisitor(EsqlTranslationContext context) : Expre
 				_ => null
 			},
 
-		NewExpression { Arguments.Count: 2 } construction when construction.Type == typeof(Range) =>
+		NewExpression { Arguments.Count: 2 } construction when IsRangeType(construction.Type) =>
 			ResolveRangePart(construction.Arguments[0]) is Index from && ResolveRangePart(construction.Arguments[1]) is Index to
 				? new Range(from, to)
 				: null,
 
-		UnaryExpression { NodeType: ExpressionType.Convert } conversion when conversion.Type == typeof(Index) =>
+		UnaryExpression { NodeType: ExpressionType.Convert } conversion when IsIndexType(conversion.Type) =>
 			ResolveRangePart(conversion.Operand) is int position and >= 0 ? (Index)position : null,
 
-		_ => TryGetConstant(expression, out var constant) ? constant : null
+		_ => TryGetConstant(expression, out var constant) ? AsRangePart(constant) : null
 	};
+
+	// Range and Index are matched by name: the netstandard2.0 build has its own from PolySharp,
+	// and a consumer's expression tree carries the runtime's
+	private static bool IsRangeType(Type? type) => type?.FullName == "System.Range";
+
+	private static bool IsIndexType(Type? type) => type?.FullName == "System.Index";
+
+	/// <summary>
+	/// A Range or Index evaluated from the query, as the type this build knows. On netstandard2.0
+	/// a captured one is the runtime's rather than the build's own, and is read back member by member.
+	/// </summary>
+	private static object? AsRangePart(object? value)
+	{
+#if NETSTANDARD2_0
+		if (value is not (Range or Index))
+		{
+			if (IsRangeType(value?.GetType()))
+				return new Range(ReadIndex(ReadProperty(value!, nameof(Range.Start))), ReadIndex(ReadProperty(value!, nameof(Range.End))));
+
+			if (IsIndexType(value?.GetType()))
+				return ReadIndex(value!);
+		}
+#endif
+		return value;
+	}
+
+#if NETSTANDARD2_0
+	private static Index ReadIndex(object index) =>
+		new((int)ReadProperty(index, nameof(Index.Value)), (bool)ReadProperty(index, nameof(Index.IsFromEnd)));
+
+	private static object ReadProperty(object value, string name) =>
+		value.GetType().GetProperty(name).GetValue(value);
+#endif
 
 	/// <summary>
 	/// A predicate over a multi-value field compared with a boolean, <c>p.Tags.Any() == false</c>.
