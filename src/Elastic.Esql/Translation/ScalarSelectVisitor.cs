@@ -65,7 +65,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
 	public static bool IsScalarSelector(LambdaExpression lambda) =>
-		lambda.Parameters.Count is 1 or 2
+		lambda.Parameters.Count == 1
 		&& TypeHelper.IsSingleValueType(lambda.ReturnType)
 		&& lambda.Body is not NewExpression and not MemberInitExpression
 		&& lambda.Body.UnwrapConvertExpressions() != lambda.Parameters[0];

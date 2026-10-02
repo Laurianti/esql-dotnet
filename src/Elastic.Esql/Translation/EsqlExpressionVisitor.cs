@@ -57,6 +57,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 	/// </summary>
 	public EsqlQuery Translate(Expression expression)
 	{
+		expression = new IndexedSelectVisitor().Visit(expression);
 		expression = new SelectMergingVisitor().Visit(expression);
 		expression = new ScalarSelectVisitor().Visit(expression);
 		_ = Visit(expression);
