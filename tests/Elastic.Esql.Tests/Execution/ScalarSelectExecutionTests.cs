@@ -773,4 +773,54 @@ public class ScalarSelectExecutionTests : EsqlTestBase
 			| LIMIT 2
 			""".NativeLineEndings());
 	}
+
+	[Test]
+	public async Task ToListAsync_DateField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"@timestamp","type":"date"}],"values":[["2024-01-01T00:00:00.000Z"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Timestamp)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+	}
+
+	[Test]
+	public async Task ToListAsync_DateTimeOffsetField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"timestamp","type":"date"}],"values":[["2024-01-01T00:00:00.000Z"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<DateTimeOffsetPropertyModel>(executor)
+			.From("events")
+			.Select(e => e.Timestamp)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero));
+	}
+
+	[Test]
+	public void Max_AfterDateField_ReadsTheLatestDate()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"max","type":"date"}],"values":[["2024-01-01T00:00:00.000Z"]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Timestamp)
+			.Max();
+
+		_ = result.Should().Be(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+	}
 }

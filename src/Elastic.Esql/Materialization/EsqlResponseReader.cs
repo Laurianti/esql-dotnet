@@ -238,6 +238,7 @@ internal sealed partial class EsqlResponseReader
 	private static bool IsPrimitiveJsonType(Type type)
 	{
 		var t = Nullable.GetUnderlyingType(type) ?? type;
-		return t.IsPrimitive || t == typeof(decimal) || t == typeof(string) || t.IsEnum;
+		return t.IsPrimitive || t == typeof(decimal) || t == typeof(string) || t.IsEnum
+			|| t == typeof(DateTime) || t == typeof(DateTimeOffset);
 	}
 }

@@ -17,6 +17,7 @@ namespace Elastic.Esql.Tests;
 
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(ResultFieldDocument))]
+[JsonSerializable(typeof(DateTimeOffsetPropertyModel))]
 [JsonSerializable(typeof(long))]
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(OddlyNamedTaggedProduct))]
