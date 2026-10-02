@@ -2,6 +2,7 @@
 // Elasticsearch B.V licenses this file to you under the Apache 2.0 License.
 // See the LICENSE file in the project root for more information
 
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -55,6 +56,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.Any)
 	];
 
+	private static readonly ConcurrentDictionary<Type, (Type Row, PropertyInfo Result)> RowTypes = new();
+
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
 	private readonly Dictionary<Expression, SingleValue> _singleValues = [];
 
@@ -70,22 +73,30 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		&& lambda.Body is not NewExpression and not MemberInitExpression
 		&& lambda.Body.UnwrapConvertExpressions() != lambda.Parameters[0];
 
-	/// <summary>A scalar selector that computes its value rather than reading a field.</summary>
-	public static bool IsComputedScalarSelector(LambdaExpression lambda) =>
-		IsScalarSelector(lambda) && !IsFieldPath(lambda.Body);
+	/// <summary>A single-value selector that computes its value rather than reading a field.</summary>
+	public static bool IsComputed(LambdaExpression singleValueSelector) => !IsFieldPath(singleValueSelector.Body);
 
 	/// <summary>
-	/// Wraps a computed scalar selector into <c>new ScalarRow&lt;T&gt; { Result = ... }</c>,
+	/// Wraps a computed single-value selector into <c>new ScalarRow&lt;T&gt; { Result = ... }</c>,
 	/// which projects into the <c>result</c> column.
 	/// </summary>
-	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
+	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapped selector is translated to ES|QL, never compiled into a delegate.")]
 	public static LambdaExpression WrapComputedSelector(LambdaExpression lambda)
 	{
-		var rowType = typeof(ScalarRow<>).MakeGenericType(lambda.ReturnType);
-		var body = Expression.MemberInit(
-			Expression.New(rowType),
-			Expression.Bind(rowType.GetProperty(nameof(ScalarRow<>.Result)) ?? throw new InvalidOperationException("The scalar row has no Result property."), lambda.Body));
-		return Expression.Lambda(body, lambda.Parameters);
+		var (row, result) = RowOf(lambda.ReturnType);
+		return Expression.Lambda(Expression.MemberInit(Expression.New(row), Expression.Bind(result, lambda.Body)), lambda.Parameters);
+	}
+
+	// The ScalarRow<T> for a value type, with its Result property, resolved once per type.
+	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
+	private static (Type Row, PropertyInfo Result) RowOf(Type valueType)
+	{
+		if (RowTypes.TryGetValue(valueType, out var known))
+			return known;
+
+		var row = typeof(ScalarRow<>).MakeGenericType(valueType);
+		var result = row.GetProperty(nameof(ScalarRow<>.Result)) ?? throw new InvalidOperationException("The scalar row has no Result property.");
+		return RowTypes.GetOrAdd(valueType, (row, result));
 	}
 
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Generic method instantiation uses types from the existing expression tree.")]
@@ -183,16 +194,14 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		node.Arguments.Skip(1).Any(a => a is UnaryExpression { Operand: LambdaExpression })
 		|| (SelectorAggregates.Contains(node.Method.Name) && node.Arguments.Count == 1);
 
-	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
 	private static Expression ColumnOf(LambdaExpression selector)
 	{
 		if (IsFieldPath(selector.Body))
 			return selector.Body;
 
-		// The column is the member the wrapped selector binds, read off a row of the wrapper type.
-		var row = (MemberInitExpression)WrapComputedSelector(selector).Body;
-		var binding = (MemberAssignment)row.Bindings[0];
-		return Expression.MakeMemberAccess(Expression.Parameter(row.Type, "row"), binding.Member);
+		// The column is the Result member of the row the wrapped selector projects into.
+		var (row, result) = RowOf(selector.ReturnType);
+		return Expression.MakeMemberAccess(Expression.Parameter(row, "row"), result);
 	}
 
 	// Sum and Average have one overload per numeric type; Min and Max take the result type as a generic argument.

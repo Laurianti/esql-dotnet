@@ -297,7 +297,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 
 			// A computed single value is projected as the member of a one-member row, into the result column.
 			var isScalar = ScalarSelectVisitor.IsScalarSelector(lambda);
-			var projected = ScalarSelectVisitor.IsComputedScalarSelector(lambda) ? ScalarSelectVisitor.WrapComputedSelector(lambda) : lambda;
+			var projected = isScalar && ScalarSelectVisitor.IsComputed(lambda) ? ScalarSelectVisitor.WrapComputedSelector(lambda) : lambda;
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
 			var result = projectionVisitor.Translate(projected);

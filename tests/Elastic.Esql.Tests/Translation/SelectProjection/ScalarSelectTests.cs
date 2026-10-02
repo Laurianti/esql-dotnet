@@ -1996,4 +1996,27 @@ public class ScalarSelectTests : EsqlTestBase
             | KEEP m
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_ComputedOfTwoTypesInOneQuery_ReadsEachResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.StatusCode * 2)
+			.Where(x => x > 1)
+			.Select(x => x > 500)
+			.Where(b => b)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (statusCode * 2)
+            | KEEP result
+            | WHERE result > 1
+            | EVAL result = (result > 500)
+            | KEEP result
+            | WHERE result
+            """.NativeLineEndings());
+	}
 }
