@@ -2019,4 +2019,30 @@ public class ScalarSelectTests : EsqlTestBase
             | WHERE result
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_ComputedThenSkip_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.Skip(2)
+			.Where(x => x > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'Skip' is not directly supported*");
+	}
+
+	[Test]
+	public void Select_FieldThenDistinct_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Distinct()
+			.Where(m => m == "ab")
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'Distinct' is not directly supported*");
+	}
 }

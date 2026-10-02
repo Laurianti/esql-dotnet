@@ -25,9 +25,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.OrderByDescending),
 		nameof(Queryable.ThenBy),
 		nameof(Queryable.ThenByDescending),
-		nameof(Queryable.Take),
-		nameof(Queryable.Skip),
-		nameof(Queryable.Distinct)
+		nameof(Queryable.Take)
 	];
 
 	private static readonly HashSet<string> SelectorAggregates =
