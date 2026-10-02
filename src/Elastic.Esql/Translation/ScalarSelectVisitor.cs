@@ -54,6 +54,37 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.Any)
 	];
 
+	// Sum and Average have one overload per numeric type; Min and Max take the result type as a generic argument.
+	private static readonly Dictionary<(string, Type), MethodInfo> NumericSelectorAggregates = new()
+	{
+		[(nameof(Queryable.Sum), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, int>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, long>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Sum).Method,
+		[(nameof(Queryable.Average), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, double>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, double>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Average).Method,
+		[(nameof(Queryable.Sum), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, int?>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, long?>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Sum).Method,
+		[(nameof(Queryable.Sum), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Sum).Method,
+		[(nameof(Queryable.Average), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, double?>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, double?>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Average).Method,
+		[(nameof(Queryable.Average), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Average).Method
+	};
+
+	private static readonly MethodInfo MinWithSelector =
+		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Min).Method.GetGenericMethodDefinition();
+
+	private static readonly MethodInfo MaxWithSelector =
+		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Max).Method.GetGenericMethodDefinition();
+
 	private static readonly ConcurrentDictionary<Type, (Type Row, PropertyInfo Result)> RowTypes = new();
 
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
@@ -201,37 +232,6 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		var (row, result) = RowOf(selector.ReturnType);
 		return Expression.MakeMemberAccess(Expression.Parameter(row, "row"), result);
 	}
-
-	// Sum and Average have one overload per numeric type; Min and Max take the result type as a generic argument.
-	private static readonly Dictionary<(string, Type), MethodInfo> NumericSelectorAggregates = new()
-	{
-		[(nameof(Queryable.Sum), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, int>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, long>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Sum).Method,
-		[(nameof(Queryable.Average), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Average).Method,
-		[(nameof(Queryable.Sum), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, int?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, long?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Average), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Average).Method
-	};
-
-	private static readonly MethodInfo MinWithSelector =
-		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Min).Method.GetGenericMethodDefinition();
-
-	private static readonly MethodInfo MaxWithSelector =
-		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Max).Method.GetGenericMethodDefinition();
 
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Generic method instantiation uses types from the existing expression tree.")]
 	[UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "Generic method instantiation uses types from the existing expression tree.")]
