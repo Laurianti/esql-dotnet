@@ -36,6 +36,23 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.Max)
 	];
 
+	// The operators the translation supports over a row, whose lambdas take that row. Any other operator, such as Join,
+	// GroupJoin, SelectMany or TakeWhile, is left to the translation, which refuses it with a message of its own.
+	private static readonly HashSet<string> TranslatedOperators =
+	[
+		.. RowPreservingOperators,
+		.. SelectorAggregates,
+		nameof(Queryable.Select),
+		nameof(Queryable.GroupBy),
+		nameof(Queryable.First),
+		nameof(Queryable.FirstOrDefault),
+		nameof(Queryable.Single),
+		nameof(Queryable.SingleOrDefault),
+		nameof(Queryable.Count),
+		nameof(Queryable.LongCount),
+		nameof(Queryable.Any)
+	];
+
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
 	private readonly Dictionary<Expression, ScalarRow> _scalarRows = [];
 
@@ -81,18 +98,31 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		if (_scalarRows.TryGetValue(visited.Arguments[0], out var row))
 			return Rewrite(visited, row);
 
-		// A single aggregation after a GroupBy is translated into STATS beside the key, so the row is not a single value.
+		// A single aggregation after a GroupBy is translated into STATS beside the key, under the name of its method,
+		// so a translated operator that reads its value has no column to name. The others leave it as it is.
 		if (_groupedAggregations.Contains(visited.Arguments[0]))
 		{
-			throw new NotSupportedException(
-				$"A single aggregation after GroupBy cannot be followed by {visited.Method.Name}: project it into a member, "
-				+ "as in 'g => new { Count = g.Count() }', and read the member.");
+			if (TranslatedOperators.Contains(visited.Method.Name) && ReadsTheValue(visited))
+			{
+				throw new NotSupportedException(
+					$"A single aggregation after GroupBy cannot be followed by {visited.Method.Name}, which reads its value: "
+					+ "project it into a member, as in 'g => new { Count = g.Count() }', and read the member.");
+			}
+
+			if (RowPreservingOperators.Contains(visited.Method.Name))
+				_ = _groupedAggregations.Add(visited);
+
+			return visited;
 		}
 
 		if (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } selector && IsScalarSelector(selector))
 		{
+			// Only an aggregation call: any other selector after a GroupBy is refused there with a message of its own.
 			if (visited.Arguments[0] is MethodCallExpression { Method.Name: nameof(Queryable.GroupBy) })
-				_ = _groupedAggregations.Add(visited);
+			{
+				if (selector.Body.UnwrapConvertExpressions() is MethodCallExpression)
+					_ = _groupedAggregations.Add(visited);
+			}
 			else
 				_scalarRows[visited] = new ScalarRow(selector, ColumnOf(selector));
 		}
@@ -145,6 +175,11 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 		return rewritten;
 	}
+
+	// An operator that takes a lambda over the row, or an aggregate that, without one, aggregates the row itself.
+	private static bool ReadsTheValue(MethodCallExpression node) =>
+		node.Arguments.Skip(1).Any(a => a is UnaryExpression { Operand: LambdaExpression })
+		|| (SelectorAggregates.Contains(node.Method.Name) && node.Arguments.Count == 1);
 
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
 	private static Expression ColumnOf(LambdaExpression selector)
