@@ -139,6 +139,10 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		if (RowPreservingOperators.Contains(name))
 			_scalarRows[rewritten] = row;
 
+		// A Select further down that again returns a single value leaves a column of its own.
+		else if (name == nameof(Queryable.Select) && ExtractLambda(rewritten) is { } selector && IsScalarSelector(selector))
+			_scalarRows[rewritten] = new ScalarRow(selector, ColumnOf(selector));
+
 		return rewritten;
 	}
 

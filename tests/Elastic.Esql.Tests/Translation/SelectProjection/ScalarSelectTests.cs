@@ -1578,4 +1578,49 @@ public class ScalarSelectTests : EsqlTestBase
             | KEEP m
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_ComputedAfterWhereThenWhere_FiltersOnTheNewResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.Where(x => x > 1)
+			.Select(x => x * 2)
+			.Where(y => y > 5)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | WHERE result > 1.0
+            | EVAL result = (result * 2.0)
+            | KEEP result
+            | WHERE result > 5.0
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldAfterWhereThenComputedThenWhere_FiltersOnTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => m.ToUpperInvariant())
+			.Where(u => u == "AB")
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message == "ab"
+            | EVAL result = TO_UPPER(message)
+            | KEEP result
+            | WHERE result == "AB"
+            """.NativeLineEndings());
+	}
 }
