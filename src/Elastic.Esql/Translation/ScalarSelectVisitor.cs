@@ -56,12 +56,12 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	];
 
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
-	private readonly Dictionary<Expression, ScalarRow> _scalarRows = [];
+	private readonly Dictionary<Expression, SingleValue> _singleValues = [];
 
 	// The single aggregations that follow a GroupBy.
 	private readonly HashSet<Expression> _groupedAggregations = [];
 
-	private readonly record struct ScalarRow(LambdaExpression Selector, Expression Column);
+	private readonly record struct SingleValue(LambdaExpression Selector, Expression Column);
 
 	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
 	public static bool IsScalarSelector(LambdaExpression lambda) =>
@@ -75,16 +75,16 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		IsScalarSelector(lambda) && !IsFieldPath(lambda.Body);
 
 	/// <summary>
-	/// Wraps a computed scalar selector into <c>new ScalarResult&lt;T&gt; { Result = ... }</c>,
+	/// Wraps a computed scalar selector into <c>new ScalarRow&lt;T&gt; { Result = ... }</c>,
 	/// which projects into the <c>result</c> column.
 	/// </summary>
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
 	public static LambdaExpression WrapComputedSelector(LambdaExpression lambda)
 	{
-		var rowType = typeof(ScalarResult<>).MakeGenericType(lambda.ReturnType);
+		var rowType = typeof(ScalarRow<>).MakeGenericType(lambda.ReturnType);
 		var body = Expression.MemberInit(
 			Expression.New(rowType),
-			Expression.Bind(rowType.GetProperty(nameof(ScalarResult<>.Result)) ?? throw new InvalidOperationException("The scalar row has no Result property."), lambda.Body));
+			Expression.Bind(rowType.GetProperty(nameof(ScalarRow<>.Result)) ?? throw new InvalidOperationException("The scalar row has no Result property."), lambda.Body));
 		return Expression.Lambda(body, lambda.Parameters);
 	}
 
@@ -97,8 +97,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		if (visited.Method.DeclaringType != typeof(Queryable) || visited.Arguments.Count == 0)
 			return visited;
 
-		if (_scalarRows.TryGetValue(visited.Arguments[0], out var row))
-			return TranslatedOperators.Contains(visited.Method.Name) ? Rewrite(visited, row) : visited;
+		if (_singleValues.TryGetValue(visited.Arguments[0], out var value))
+			return TranslatedOperators.Contains(visited.Method.Name) ? Rewrite(visited, value) : visited;
 
 		// A single aggregation after a GroupBy is translated into STATS beside the key, under the name of its method,
 		// so a translated operator that reads its value has no column to name. The others leave it as it is.
@@ -126,7 +126,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 					_ = _groupedAggregations.Add(visited);
 			}
 			else
-				_scalarRows[visited] = new ScalarRow(selector, ColumnOf(selector));
+				_singleValues[visited] = new SingleValue(selector, ColumnOf(selector));
 		}
 
 		return visited;
@@ -134,46 +134,46 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Generic method instantiation uses types from the existing expression tree.")]
 	[UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "Generic method instantiation uses types from the existing expression tree.")]
-	private Expression Rewrite(MethodCallExpression node, ScalarRow row)
+	private Expression Rewrite(MethodCallExpression node, SingleValue value)
 	{
 		var name = node.Method.Name;
 
 		// A Select right after the scalar one reads the value through the selector that produced it, so the two fold into one.
 		if (name == nameof(Queryable.Select) && ExtractLambda(node) is { } outer
-			&& node.Arguments[0] is MethodCallExpression inner && ExtractLambda(inner) == row.Selector)
+			&& node.Arguments[0] is MethodCallExpression inner && ExtractLambda(inner) == value.Selector)
 		{
-			var composed = Expression.Lambda(Substitute(outer, row.Selector.Body), row.Selector.Parameters);
+			var composed = Expression.Lambda(Substitute(outer, value.Selector.Body), value.Selector.Parameters);
 			var source = inner.Arguments[0];
 			var method = node.Method.GetGenericMethodDefinition()
-				.MakeGenericMethod(row.Selector.Parameters[0].Type, outer.ReturnType);
+				.MakeGenericMethod(value.Selector.Parameters[0].Type, outer.ReturnType);
 			var folded = Expression.Call(method, source, Expression.Quote(composed));
 			if (IsScalarSelector(composed))
-				_scalarRows[folded] = new ScalarRow(composed, ColumnOf(composed));
+				_singleValues[folded] = new SingleValue(composed, ColumnOf(composed));
 			return folded;
 		}
 
 		// Sum(), Max() and the like name no field: they aggregate the single value.
 		if (SelectorAggregates.Contains(name) && node.Arguments.Count == 1)
 		{
-			var elementType = row.Selector.ReturnType;
+			var elementType = value.Selector.ReturnType;
 			var parameter = Expression.Parameter(elementType, "x");
-			var selector = Expression.Lambda(row.Column, parameter);
+			var selector = Expression.Lambda(value.Column, parameter);
 			return Expression.Call(FindSelectorOverload(node.Method, elementType), node.Arguments[0], Expression.Quote(selector));
 		}
 
 		var arguments = node.Arguments
 			.Select(a => a is UnaryExpression { Operand: LambdaExpression lambda } && lambda.Parameters.Count == 1
-				? Expression.Quote(Expression.Lambda(lambda.Type, Substitute(lambda, row.Column), lambda.Parameters))
+				? Expression.Quote(Expression.Lambda(lambda.Type, Substitute(lambda, value.Column), lambda.Parameters))
 				: a)
 			.ToList();
 		var rewritten = node.Update(node.Object, arguments);
 
 		if (RowPreservingOperators.Contains(name))
-			_scalarRows[rewritten] = row;
+			_singleValues[rewritten] = value;
 
 		// A Select further down that again returns a single value leaves a column of its own.
 		else if (name == nameof(Queryable.Select) && ExtractLambda(rewritten) is { } selector && IsScalarSelector(selector))
-			_scalarRows[rewritten] = new ScalarRow(selector, ColumnOf(selector));
+			_singleValues[rewritten] = new SingleValue(selector, ColumnOf(selector));
 
 		return rewritten;
 	}
@@ -276,7 +276,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 /// through the naming policy, since no serializer context of the caller knows this type.
 /// </remarks>
 [CompilerGenerated]
-internal sealed class ScalarResult<T>
+internal sealed class ScalarRow<T>
 {
 	public T Result { get; set; } = default!;
 }
