@@ -1814,4 +1814,142 @@ public class ScalarSelectTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>();
 	}
+
+	[Test]
+	public void Select_FieldThenWhereThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message == "ab"
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenIdentityThenWhere_FiltersOnTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => m)
+			.Where(m => m != "cd")
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message == "ab"
+            | KEEP message
+            | WHERE message != "cd"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenCast_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.StatusCode)
+			.Where(s => s > 1)
+			.Select(s => (long)s)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP statusCode
+            | WHERE statusCode > 1
+            | KEEP statusCode
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_RenamedFieldThenWhereThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Level)
+			.Where(v => v == "ab")
+			.Select(v => v)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP log.level
+            | WHERE log.level == "ab"
+            | KEEP log.level
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_NestedFieldThenWhereThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<EagerNestedDocument>()
+			.From("docs")
+			.Select(d => d.Host.Name)
+			.Where(n => n == "ab")
+			.Select(n => n)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM docs
+            | KEEP host.name
+            | WHERE host.name == "ab"
+            | KEEP host.name
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenOrderByThenTakeThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.OrderBy(m => m)
+			.Take(3)
+			.Select(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | SORT message
+            | LIMIT 3
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenMemberOfTheValue_GeneratesEval()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => m.Length)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message == "ab"
+            | EVAL result = LENGTH(message)
+            | KEEP result
+            """.NativeLineEndings());
+	}
 }

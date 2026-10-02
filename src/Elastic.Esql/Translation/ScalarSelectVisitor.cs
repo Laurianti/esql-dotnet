@@ -72,7 +72,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 	/// <summary>A scalar selector that computes its value rather than reading a field.</summary>
 	public static bool IsComputedScalarSelector(LambdaExpression lambda) =>
-		IsScalarSelector(lambda) && !IsFieldPath(lambda.Body, lambda.Parameters[0]);
+		IsScalarSelector(lambda) && !IsFieldPath(lambda.Body);
 
 	/// <summary>
 	/// Wraps a computed scalar selector into <c>new ScalarResult&lt;T&gt; { Result = ... }</c>,
@@ -186,7 +186,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
 	private static Expression ColumnOf(LambdaExpression selector)
 	{
-		if (IsFieldPath(selector.Body, selector.Parameters[0]))
+		if (IsFieldPath(selector.Body))
 			return selector.Body;
 
 		// The column is the member the wrapped selector binds, read off a row of the wrapper type.
@@ -243,9 +243,10 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	private static LambdaExpression? ExtractLambda(MethodCallExpression node) =>
 		node.Arguments.Count >= 2 && node.Arguments[1] is UnaryExpression { Operand: LambdaExpression lambda } ? lambda : null;
 
-	// A path of document members down from the row. A member of a value, such as DateTime.Hour or string.Length,
-	// ends the path: the value is computed from the field rather than read as one.
-	private static bool IsFieldPath(Expression body, ParameterExpression parameter)
+	// A path of document members down from a row. The row is the selector's own parameter, or the one an earlier
+	// Select read the field from, once an operator after it has been rewritten. A member of a value, such as
+	// DateTime.Hour or string.Length, ends the path: the value is computed from the field rather than read as one.
+	private static bool IsFieldPath(Expression body)
 	{
 		var current = body.UnwrapConvertExpressions();
 		if (current is not MemberExpression)
@@ -259,7 +260,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			current = parent;
 		}
 
-		return current == parameter;
+		return current is ParameterExpression;
 	}
 
 	private sealed class ParameterReplacer(ParameterExpression parameter, Expression replacement) : ExpressionVisitor
