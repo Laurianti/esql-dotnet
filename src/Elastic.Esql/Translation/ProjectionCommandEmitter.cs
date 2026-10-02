@@ -23,7 +23,8 @@ internal sealed class ProjectionCommandEmitter(EsqlTranslationContext context)
 	/// The projection visitor has already turned aliases whose source must survive into EVAL copies.
 	/// For join projections, <paramref name="renameCollisionFields"/> additionally converts renames
 	/// whose target still exists post-join, because ES|QL's RENAME fails if the target column already
-	/// exists while EVAL overwrites it.
+	/// exists while EVAL overwrites it. With <paramref name="retainMetadata"/> false, for a projection to a single value,
+	/// the metadata fields are left out of the KEEP and dropped from the context, so no later projection retains them.
 	/// </summary>
 	public void Emit(SelectProjectionVisitor.ProjectionResult result, HashSet<string>? renameCollisionFields = null, bool retainMetadata = true)
 	{
@@ -50,9 +51,15 @@ internal sealed class ProjectionCommandEmitter(EsqlTranslationContext context)
 		foreach (var (field, _) in evalExpressions)
 			allKeepFields.Add(field);
 
-		// A single value is the whole row: the metadata columns would turn it into a row of several.
+		// A single value is the whole row: the metadata columns would turn it into a row of several. Once the KEEP
+		// leaves them out, no later projection may keep them again.
 		if (retainMetadata)
 			AppendRetainedMetadataNames(allKeepFields, result);
+		else
+		{
+			_context.ActiveMetadata = MetadataField.None;
+			_context.ForkActive = false;
+		}
 
 		if (allKeepFields.Count > 0)
 			_context.Commands.Add(new KeepCommand(allKeepFields));

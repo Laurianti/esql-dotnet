@@ -309,10 +309,6 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			Context.HasProjected |= !IsIdentitySelector(lambda);
 
 			ProjectionEmitter.Emit(result, retainMetadata: !isScalar);
-
-			// The single value left the metadata columns out, so nothing after it may keep them.
-			if (isScalar)
-				ClearMetadataAfterStats();
 		}
 	}
 

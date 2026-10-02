@@ -1952,4 +1952,48 @@ public class ScalarSelectTests : EsqlTestBase
             | KEEP result
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_FieldAfterForkThenObject_DoesNotKeepTheForkColumn()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Fork(b => b.Where(l => l.IsError), b => b.Take(1))
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => new { M = m })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | FORK (WHERE isError) (LIMIT 1)
+            | KEEP message
+            | WHERE message == "ab"
+            | RENAME message AS m
+            | KEEP m
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldAfterForkWithMetadataThenObject_KeepsNeither()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*", MetadataField.Id)
+			.Fork(b => b.Where(l => l.IsError), b => b.Take(1))
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select(m => new { M = m })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-* METADATA _id
+            | FORK (WHERE isError) (LIMIT 1)
+            | KEEP message
+            | WHERE message == "ab"
+            | RENAME message AS m
+            | KEEP m
+            """.NativeLineEndings());
+	}
 }
