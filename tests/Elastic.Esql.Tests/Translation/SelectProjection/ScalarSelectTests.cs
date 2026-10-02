@@ -1744,4 +1744,74 @@ public class ScalarSelectTests : EsqlTestBase
             | WHERE at > "10:30:00"
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_FieldThenJoin_IsNotSupported()
+	{
+		var threats = CreateQuery<ThreatListEntry>().From("threat_list");
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.ClientIp)
+			.Join(threats, ip => ip, t => t.ClientIp, (ip, t) => new { Ip = ip, t.ThreatLevel })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void Select_ComputedThenJoin_IsNotSupported()
+	{
+		var languages = CreateQuery<LanguageLookup>().From("languages_lookup");
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.StatusCode / 100)
+			.Join(languages, c => c, x => x.LanguageCode, (c, x) => new { x.LanguageName })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenJoin_IsNotSupported()
+	{
+		var threats = CreateQuery<ThreatListEntry>().From("threat_list");
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.ClientIp)
+			.Where(ip => ip != null)
+			.Join(threats, ip => ip, t => t.ClientIp, (ip, t) => new { t.ThreatLevel })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
+
+	[Test]
+	public void Select_FieldThenSelectMany_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.SelectMany(m => m)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*SelectMany*");
+	}
+
+	[Test]
+	public void Select_FieldThenLeftJoin_IsNotSupported()
+	{
+		var threats = CreateQuery<ThreatListEntry>().From("threat_list");
+
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.ClientIp)
+			.GroupJoin(threats, ip => ip, t => t.ClientIp, (ip, ts) => new { ip, ts })
+			.SelectMany(x => x.ts.DefaultIfEmpty(), (x, t) => new { x.ip, t!.ThreatLevel })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>();
+	}
 }

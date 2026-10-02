@@ -908,4 +908,122 @@ public class ScalarSelectExecutionTests : EsqlTestBase
 
 		_ = result.Should().Equal(new TimeOnly(10, 30));
 	}
+
+	[Test]
+	public void FirstOrDefault_WithPredicateAfterComputed_FiltersOnTheResult()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"result","type":"double"}],"values":[[8.1]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.FirstOrDefault(x => x > 5);
+
+		_ = result.Should().Be(8.1);
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM logs-*
+			| EVAL result = (duration * 3.0)
+			| KEEP result
+			| WHERE result > 5.0
+			| LIMIT 1
+			""".NativeLineEndings());
+	}
+
+	[Test]
+	public void Single_WithPredicateAfterComputed_FiltersOnTheResult()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"result","type":"double"}],"values":[[8.1]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.Single(x => x > 5);
+
+		_ = result.Should().Be(8.1);
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM logs-*
+			| EVAL result = (duration * 3.0)
+			| KEEP result
+			| WHERE result > 5.0
+			| LIMIT 2
+			""".NativeLineEndings());
+	}
+
+	[Test]
+	public void SingleOrDefault_WithPredicateAfterComputed_FiltersOnTheResult()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"result","type":"double"}],"values":[[8.1]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.SingleOrDefault(x => x > 5);
+
+		_ = result.Should().Be(8.1);
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM logs-*
+			| EVAL result = (duration * 3.0)
+			| KEEP result
+			| WHERE result > 5.0
+			| LIMIT 2
+			""".NativeLineEndings());
+	}
+
+	[Test]
+	public void LongCount_WithPredicateAfterComputed_FiltersOnTheResult()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"count","type":"long"}],"values":[[1]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.LongCount(x => x > 5);
+
+		_ = result.Should().Be(1L);
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM logs-*
+			| EVAL result = (duration * 3.0)
+			| KEEP result
+			| WHERE result > 5.0
+			| STATS count = COUNT(*)
+			""".NativeLineEndings());
+	}
+
+	[Test]
+	public void Max_WithIdentitySelectorAfterField_AggregatesTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"max","type":"double"}],"values":[[3.0]]}"""
+		};
+
+		var result = CreateExecutableQuery<LogEntry>(executor)
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.Max(x => x);
+
+		_ = result.Should().Be(3.0);
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM logs-*
+			| KEEP duration
+			| STATS max = MAX(duration)
+			""".NativeLineEndings());
+	}
 }

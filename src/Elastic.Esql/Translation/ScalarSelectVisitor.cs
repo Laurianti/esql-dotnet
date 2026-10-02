@@ -37,8 +37,9 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.Max)
 	];
 
-	// The operators the translation supports over a row, whose lambdas take that row. Any other operator, such as Join,
-	// GroupJoin, SelectMany or TakeWhile, is left to the translation, which refuses it with a message of its own.
+	// The operators the translation supports over a row, whose lambdas take that row: after a single value they are
+	// rewritten to read its column. Any other operator, such as Join, GroupJoin, SelectMany or TakeWhile, is left to
+	// the translation, which refuses it with a message of its own.
 	private static readonly HashSet<string> TranslatedOperators =
 	[
 		.. RowPreservingOperators,
@@ -97,7 +98,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			return visited;
 
 		if (_scalarRows.TryGetValue(visited.Arguments[0], out var row))
-			return Rewrite(visited, row);
+			return TranslatedOperators.Contains(visited.Method.Name) ? Rewrite(visited, row) : visited;
 
 		// A single aggregation after a GroupBy is translated into STATS beside the key, under the name of its method,
 		// so a translated operator that reads its value has no column to name. The others leave it as it is.
