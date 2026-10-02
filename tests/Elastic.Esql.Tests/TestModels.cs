@@ -16,6 +16,8 @@ namespace Elastic.Esql.Tests;
 // ============================================================================
 
 [JsonSerializable(typeof(LogEntry))]
+[JsonSerializable(typeof(ResultFieldDocument))]
+[JsonSerializable(typeof(long))]
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(OddlyNamedTaggedProduct))]
 [JsonSerializable(typeof(OddlyNestedTaggedProduct))]
@@ -1002,4 +1004,12 @@ public sealed class CountingValue<T>(T value)
 			return value;
 		}
 	}
+}
+
+/// <summary>A document with a field named like the column a computed scalar Select projects into.</summary>
+public class ResultFieldDocument
+{
+	public double Result { get; set; }
+
+	public double Duration { get; set; }
 }

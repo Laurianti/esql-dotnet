@@ -25,7 +25,7 @@ internal sealed class ProjectionCommandEmitter(EsqlTranslationContext context)
 	/// whose target still exists post-join, because ES|QL's RENAME fails if the target column already
 	/// exists while EVAL overwrites it.
 	/// </summary>
-	public void Emit(SelectProjectionVisitor.ProjectionResult result, HashSet<string>? renameCollisionFields = null)
+	public void Emit(SelectProjectionVisitor.ProjectionResult result, HashSet<string>? renameCollisionFields = null, bool retainMetadata = true)
 	{
 		var safeRenames = new List<(string Source, string Target)>();
 		var evalExpressions = new List<(string Field, string Expression)>(result.EvalExpressions);
@@ -50,7 +50,9 @@ internal sealed class ProjectionCommandEmitter(EsqlTranslationContext context)
 		foreach (var (field, _) in evalExpressions)
 			allKeepFields.Add(field);
 
-		AppendRetainedMetadataNames(allKeepFields, result);
+		// A single value is the whole row: the metadata columns would turn it into a row of several.
+		if (retainMetadata)
+			AppendRetainedMetadataNames(allKeepFields, result);
 
 		if (allKeepFields.Count > 0)
 			_context.Commands.Add(new KeepCommand(allKeepFields));
