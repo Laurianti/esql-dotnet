@@ -1558,4 +1558,24 @@ public class ScalarSelectTests : EsqlTestBase
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*g => new { Count = g.Count() }*");
 	}
+
+	[Test]
+	public void Select_FieldWithMetadataThenObject_DoesNotKeepTheDroppedMetadata()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*", MetadataField.Id)
+			.Select(l => l.Message)
+			.Where(m => m == "a")
+			.Select(m => new { M = m })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-* METADATA _id
+            | KEEP message
+            | WHERE message == "a"
+            | RENAME message AS m
+            | KEEP m
+            """.NativeLineEndings());
+	}
 }
