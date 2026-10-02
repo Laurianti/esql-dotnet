@@ -18,6 +18,7 @@ namespace Elastic.Esql.Tests;
 [JsonSerializable(typeof(LogEntry))]
 [JsonSerializable(typeof(ResultFieldDocument))]
 [JsonSerializable(typeof(DateTimeOffsetPropertyModel))]
+[JsonSerializable(typeof(ValueTypeDocument))]
 [JsonSerializable(typeof(long))]
 [JsonSerializable(typeof(TaggedProduct))]
 [JsonSerializable(typeof(OddlyNamedTaggedProduct))]
@@ -1014,3 +1015,18 @@ public class ResultFieldDocument
 
 	public double Duration { get; set; }
 }
+
+/// <summary>A document with the value types that are read as a single value besides numbers, strings and dates.</summary>
+public class ValueTypeDocument
+{
+	public Guid Id { get; set; }
+
+	public Guid? ParentId { get; set; }
+
+	public TimeSpan Elapsed { get; set; }
+
+	public DateOnly Day { get; set; }
+
+	public TimeOnly At { get; set; }
+}
+

@@ -823,4 +823,89 @@ public class ScalarSelectExecutionTests : EsqlTestBase
 
 		_ = result.Should().Be(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 	}
+
+	[Test]
+	public async Task ToListAsync_GuidField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"id","type":"keyword"}],"values":[["6f9619ff-8b86-d011-b42d-00c04fc964ff"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.Id)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new Guid("6f9619ff-8b86-d011-b42d-00c04fc964ff"));
+	}
+
+	[Test]
+	public async Task ToListAsync_NullableGuidField_ReadsTheFieldAndNull()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"parentId","type":"keyword"}],"values":[["6f9619ff-8b86-d011-b42d-00c04fc964ff"],[null]]}"""
+		};
+
+		var result = await CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.ParentId)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new Guid("6f9619ff-8b86-d011-b42d-00c04fc964ff"), null);
+	}
+
+	[Test]
+	public async Task ToListAsync_TimeSpanField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"elapsed","type":"keyword"}],"values":[["00:00:05"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.Elapsed)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(TimeSpan.FromSeconds(5));
+	}
+
+	[Test]
+	public async Task ToListAsync_DateOnlyField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"day","type":"keyword"}],"values":[["2024-01-01"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.Day)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new DateOnly(2024, 1, 1));
+	}
+
+	[Test]
+	public async Task ToListAsync_TimeOnlyField_ReadsTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"at","type":"keyword"}],"values":[["10:30:00"]]}"""
+		};
+
+		var result = await CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.At)
+			.AsEsqlQueryable()
+			.ToListAsync();
+
+		_ = result.Should().Equal(new TimeOnly(10, 30));
+	}
 }

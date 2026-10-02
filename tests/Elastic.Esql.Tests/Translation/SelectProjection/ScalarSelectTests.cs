@@ -1623,4 +1623,125 @@ public class ScalarSelectTests : EsqlTestBase
             | WHERE result == "AB"
             """.NativeLineEndings());
 	}
+
+	[Test]
+	public void Select_GuidFieldThenWhere_FiltersOnTheField()
+	{
+		var id = new Guid("6f9619ff-8b86-d011-b42d-00c04fc964ff");
+
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.Id)
+			.Where(x => x == id)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP id
+            | WHERE id == "6f9619ff-8b86-d011-b42d-00c04fc964ff"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_NullableGuidFieldThenEqualsNull_FiltersOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.ParentId)
+			.Where(x => x == null)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP parentId
+            | WHERE parentId IS NULL
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_GuidFieldThenOrderBy_SortsOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.Id)
+			.OrderBy(x => x)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP id
+            | SORT id
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_TimeSpanFieldThenWhere_FiltersOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.Elapsed)
+			.Where(x => x > TimeSpan.FromSeconds(5))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP elapsed
+            | WHERE elapsed > 5 seconds
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_DateOnlyFieldThenWhere_FiltersOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.Day)
+			.Where(x => x > new DateOnly(2024, 1, 1))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP day
+            | WHERE day > "2024-01-01"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_DateOnlyFieldThenOrderByDescending_SortsOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.Day)
+			.OrderByDescending(x => x)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP day
+            | SORT day DESC
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_TimeOnlyFieldThenWhere_FiltersOnTheField()
+	{
+		var esql = CreateQuery<ValueTypeDocument>()
+			.From("values")
+			.Select(d => d.At)
+			.Where(x => x > new TimeOnly(10, 30))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM values
+            | KEEP at
+            | WHERE at > "10:30:00"
+            """.NativeLineEndings());
+	}
 }

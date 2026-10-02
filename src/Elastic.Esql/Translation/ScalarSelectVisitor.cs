@@ -6,6 +6,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Elastic.Esql.Core;
 
 namespace Elastic.Esql.Translation;
 
@@ -64,7 +65,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
 	public static bool IsScalarSelector(LambdaExpression lambda) =>
 		lambda.Parameters.Count is 1 or 2
-		&& IsScalarType(lambda.ReturnType)
+		&& TypeHelper.IsSingleValueType(lambda.ReturnType)
 		&& lambda.Body is not NewExpression and not MemberInitExpression
 		&& lambda.Body.UnwrapConvertExpressions() != lambda.Parameters[0];
 
@@ -252,19 +253,12 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		while (current is MemberExpression member)
 		{
 			var parent = member.Expression?.UnwrapConvertExpressions();
-			if (parent is null || IsScalarType(parent.Type))
+			if (parent is null || TypeHelper.IsSingleValueType(parent.Type))
 				return false;
 			current = parent;
 		}
 
 		return current == parameter;
-	}
-
-	private static bool IsScalarType(Type type)
-	{
-		var t = Nullable.GetUnderlyingType(type) ?? type;
-		return t.IsPrimitive || t == typeof(decimal) || t == typeof(string) || t.IsEnum
-			|| t == typeof(DateTime) || t == typeof(DateTimeOffset);
 	}
 
 	private sealed class ParameterReplacer(ParameterExpression parameter, Expression replacement) : ExpressionVisitor
