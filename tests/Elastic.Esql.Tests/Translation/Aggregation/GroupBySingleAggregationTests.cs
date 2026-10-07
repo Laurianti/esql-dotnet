@@ -26,7 +26,8 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 	private static string Translate(string method, Type[] typeArguments, params Expression[] arguments) =>
 		new EsqlFormatter().Format(QueryProvider.TranslateExpression(
 			Expression.Call(typeof(Queryable), method, typeArguments, [CountByLevel().Expression, .. arguments]),
-			inlineParameters: true));
+			inlineParameters: true
+		));
 
 	private static string Translate(string method, LambdaExpression? argument = null) =>
 		argument is null
@@ -66,7 +67,8 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 	{
 		var esql = new EsqlFormatter().Format(QueryProvider.TranslateExpression(
 			Expression.Call(typeof(Queryable), nameof(Queryable.First), [typeof(int)], CountByLevel().Take(5).Expression),
-			inlineParameters: true));
+			inlineParameters: true
+		));
 
 		_ = esql.Should().Be(
 			"""
@@ -269,7 +271,9 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 		// Sum and Average have one overload per type, Min and Max a generic one
 		var act = () => method is nameof(Queryable.Sum) or nameof(Queryable.Average)
 			? new EsqlFormatter().Format(QueryProvider.TranslateExpression(
-				Expression.Call(typeof(Queryable), method, null, CountByLevel().Expression), inlineParameters: true))
+				Expression.Call(typeof(Queryable), method, null, CountByLevel().Expression),
+				inlineParameters: true
+			))
 			: Translate(method);
 
 		_ = act.Should().Throw<NotSupportedException>().WithMessage($"*followed by {method}*");

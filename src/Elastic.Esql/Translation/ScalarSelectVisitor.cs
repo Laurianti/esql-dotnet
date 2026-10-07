@@ -155,7 +155,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			{
 				throw new NotSupportedException(
 					$"A single aggregation after GroupBy cannot be followed by {visited.Method.Name}, which reads its value: "
-					+ "project it into a member, as in 'g => new { Count = g.Count() }', and read the member.");
+					+ "project it into a member, as in 'g => new { Count = g.Count() }', and read the member."
+				);
 			}
 
 			if (RowPreservingOperators.Contains(visited.Method.Name))
