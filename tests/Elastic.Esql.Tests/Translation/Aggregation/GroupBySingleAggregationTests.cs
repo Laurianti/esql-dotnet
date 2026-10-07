@@ -304,6 +304,117 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'g.Key' is neither*");
 	}
 
+	// Only a call on the group counts as a single aggregation; any other selector keeps the GroupBy message.
+
+	[Test]
+	public void KeyMethodThenWhere_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => g.Key.ToUpperInvariant())
+			.Where(k => k == "A")
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'g.Key.ToUpperInvariant()' is neither*");
+	}
+
+	[Test]
+	public void KeyMethodThenTake_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => g.Key.ToUpperInvariant())
+			.Take(5)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'g.Key.ToUpperInvariant()' is neither*");
+	}
+
+	[Test]
+	public void MethodOfTheGroupObjectThenWhere_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => g.GetHashCode())
+			.Where(h => h > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'g.GetHashCode()' is neither*");
+	}
+
+	[Test]
+	public void ComputedFromAnAggregationThenWhere_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => g.Count() + 1)
+			.Where(c => c > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'(g.Count() + 1)' is neither*");
+	}
+
+	[Test]
+	public void StaticMethodOverAnAggregationThenWhere_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => Math.Abs(g.Count()))
+			.Where(c => c > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*'Abs(g.Count())' is neither*");
+	}
+
+	[Test]
+	public void MethodTakingTheGroupThenWhere_KeepsTheGroupByMessage()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => EqualityComparer<object>.Default.Equals(g, g))
+			.Where(b => b)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("*.Equals(g, g)' is neither*");
+	}
+
+	[Test]
+	public void EsqlAggregationThenWhere_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => EsqlFunctions.CountDistinct(g, l => l.Message))
+			.Where(c => c > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("A single aggregation after GroupBy cannot be followed by Where*");
+	}
+
+	[Test]
+	public void EsqlAggregationThenTake_LimitsTheGroups()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.Select(g => EsqlFunctions.CountDistinct(g, l => l.Message))
+			.Take(5)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS countdistinct = COUNT_DISTINCT(message) BY log.level
+            | LIMIT 5
+            """.NativeLineEndings());
+	}
+
 	[Test]
 	public void MemberAfterGroupBy_IsReadByWhere()
 	{

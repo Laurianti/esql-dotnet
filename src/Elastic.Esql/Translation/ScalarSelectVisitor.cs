@@ -161,10 +161,12 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 		if (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } selector && IsScalarSelector(selector))
 		{
-			// Only an aggregation call: any other selector after a GroupBy is refused there with a message of its own.
+			// Only a call on the group, such as g.Count() or g.Sum(x => x.Duration): any other selector after a GroupBy,
+			// g.Key.ToUpper() among them, is refused there with a message of its own.
 			if (visited.Arguments[0] is MethodCallExpression { Method.Name: nameof(Queryable.GroupBy) })
 			{
-				if (selector.Body.UnwrapConvertExpressions() is MethodCallExpression)
+				if (selector.Body.UnwrapConvertExpressions() is MethodCallExpression { Object: null, Arguments: [var group, ..] }
+					&& group == selector.Parameters[0])
 					_ = _groupedAggregations.Add(visited);
 			}
 			else
