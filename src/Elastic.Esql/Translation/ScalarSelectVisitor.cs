@@ -54,38 +54,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		nameof(Queryable.Any)
 	];
 
-	// Sum and Average have one overload per numeric type; Min and Max take the result type as a generic argument.
-	private static readonly Dictionary<(string, Type), MethodInfo> NumericSelectorAggregates = new()
-	{
-		[(nameof(Queryable.Sum), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, int>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, long>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Sum).Method,
-		[(nameof(Queryable.Average), typeof(int))] = new Func<IQueryable<int>, Expression<Func<int, int>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(long))] = new Func<IQueryable<long>, Expression<Func<long, long>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(float))] = new Func<IQueryable<float>, Expression<Func<float, float>>, float>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(double))] = new Func<IQueryable<double>, Expression<Func<double, double>>, double>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(decimal))] = new Func<IQueryable<decimal>, Expression<Func<decimal, decimal>>, decimal>(Queryable.Average).Method,
-		[(nameof(Queryable.Sum), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, int?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, long?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Sum), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Sum).Method,
-		[(nameof(Queryable.Average), typeof(int?))] = new Func<IQueryable<int?>, Expression<Func<int?, int?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(long?))] = new Func<IQueryable<long?>, Expression<Func<long?, long?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(float?))] = new Func<IQueryable<float?>, Expression<Func<float?, float?>>, float?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(double?))] = new Func<IQueryable<double?>, Expression<Func<double?, double?>>, double?>(Queryable.Average).Method,
-		[(nameof(Queryable.Average), typeof(decimal?))] = new Func<IQueryable<decimal?>, Expression<Func<decimal?, decimal?>>, decimal?>(Queryable.Average).Method
-	};
-
-	private static readonly MethodInfo MinWithSelector =
-		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Min).Method.GetGenericMethodDefinition();
-
-	private static readonly MethodInfo MaxWithSelector =
-		new Func<IQueryable<object>, Expression<Func<object, object>>, object?>(Queryable.Max).Method.GetGenericMethodDefinition();
-
-	private static readonly ConcurrentDictionary<Type, (Type Row, PropertyInfo Result)> RowTypes = new();
+	private static readonly ConcurrentDictionary<Type, PropertyInfo> ResultMembers = new();
 
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
 	private readonly Dictionary<Expression, SingleValue> _singleValues = [];
@@ -94,6 +63,13 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	private readonly HashSet<Expression> _groupedAggregations = [];
 
 	private readonly record struct SingleValue(LambdaExpression Selector, Expression Column);
+
+	/// <summary>
+	/// The column the rows of <paramref name="source"/> hold their single value in, when they hold one: the field a
+	/// Select reads, or the result column it computes. Sum(), Max() and the other aggregates without a selector name it.
+	/// </summary>
+	public Expression? SingleValueColumnOf(Expression source) =>
+		_singleValues.TryGetValue(source, out var value) ? value.Column : null;
 
 	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
 	public static bool IsScalarSelector(LambdaExpression lambda) =>
@@ -106,26 +82,20 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	public static bool IsComputed(LambdaExpression singleValueSelector) => !IsFieldPath(singleValueSelector.Body);
 
 	/// <summary>
-	/// Wraps a computed single-value selector into <c>new ScalarRow&lt;T&gt; { Result = ... }</c>,
-	/// which projects into the <c>result</c> column.
+	/// The <c>Result</c> member of <c>ScalarRow&lt;T&gt;</c> for a value type, the column a computed single value is
+	/// projected into, resolved once per type. Only the member is used, so the row type is never instantiated and no
+	/// lambda over it is built, which Native AOT could not do for a value type it has no code for.
 	/// </summary>
-	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapped selector is translated to ES|QL, never compiled into a delegate.")]
-	public static LambdaExpression WrapComputedSelector(LambdaExpression lambda)
+	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The row type is only read for its member, never instantiated.")]
+	public static PropertyInfo ResultMemberOf(Type valueType)
 	{
-		var (row, result) = RowOf(lambda.ReturnType);
-		return Expression.Lambda(Expression.MemberInit(Expression.New(row), Expression.Bind(result, lambda.Body)), lambda.Parameters);
-	}
-
-	// The ScalarRow<T> for a value type, with its Result property, resolved once per type.
-	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "The wrapper is closed over a type taken from the existing expression tree.")]
-	private static (Type Row, PropertyInfo Result) RowOf(Type valueType)
-	{
-		if (RowTypes.TryGetValue(valueType, out var known))
+		if (ResultMembers.TryGetValue(valueType, out var known))
 			return known;
 
 		var row = typeof(ScalarRow<>).MakeGenericType(valueType);
-		var result = row.GetProperty(nameof(ScalarRow<>.Result)) ?? throw new InvalidOperationException("The scalar row has no Result property.");
-		return RowTypes.GetOrAdd(valueType, (row, result));
+		var result = row.GetProperty(nameof(ScalarRow<>.Result))
+			?? throw new InvalidOperationException("The scalar row has no Result property.");
+		return ResultMembers.GetOrAdd(valueType, result);
 	}
 
 	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Generic method instantiation uses types from the existing expression tree.")]
@@ -192,15 +162,6 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			return folded;
 		}
 
-		// Sum(), Max() and the like name no field: they aggregate the single value.
-		if (SelectorAggregates.Contains(name) && node.Arguments.Count == 1)
-		{
-			var elementType = value.Selector.ReturnType;
-			var parameter = Expression.Parameter(elementType, "x");
-			var selector = Expression.Lambda(value.Column, parameter);
-			return Expression.Call(FindSelectorOverload(node.Method, elementType), node.Arguments[0], Expression.Quote(selector));
-		}
-
 		var arguments = node.Arguments
 			.Select(a => a is UnaryExpression { Operand: LambdaExpression lambda } && lambda.Parameters.Count == 1
 				? Expression.Quote(Expression.Lambda(lambda.Type, Substitute(lambda, value.Column), lambda.Parameters))
@@ -228,21 +189,11 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		if (IsFieldPath(selector.Body))
 			return selector.Body;
 
-		// The column is the Result member of the row the wrapped selector projects into.
-		var (row, result) = RowOf(selector.ReturnType);
+		// The column is the Result member the value is projected into, read off a row of that type.
+		var result = ResultMemberOf(selector.ReturnType);
+		var row = result.DeclaringType ?? throw new InvalidOperationException("The Result member has no declaring type.");
 		return Expression.MakeMemberAccess(Expression.Parameter(row, "row"), result);
 	}
-
-	[UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Generic method instantiation uses types from the existing expression tree.")]
-	[UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "Generic method instantiation uses types from the existing expression tree.")]
-	private static MethodInfo FindSelectorOverload(MethodInfo parameterless, Type elementType) =>
-		parameterless.Name switch
-		{
-			nameof(Queryable.Min) => MinWithSelector.MakeGenericMethod(elementType, elementType),
-			nameof(Queryable.Max) => MaxWithSelector.MakeGenericMethod(elementType, elementType),
-			_ when NumericSelectorAggregates.TryGetValue((parameterless.Name, elementType), out var method) => method,
-			_ => throw new NotSupportedException($"{parameterless.Name} over a {elementType.Name} is not supported.")
-		};
 
 	private static Expression Substitute(LambdaExpression lambda, Expression replacement) =>
 		new ParameterReplacer(lambda.Parameters[0], replacement).Visit(lambda.Body);
@@ -277,7 +228,10 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	}
 }
 
-/// <summary>The row a computed scalar Select projects: its single value in the <c>result</c> column.</summary>
+/// <summary>
+/// The row a computed scalar Select projects: its single value in the <c>result</c> column. Only its member is read,
+/// to name that column; the type is never instantiated.
+/// </summary>
 /// <remarks>
 /// Marked as compiler-generated so that its member is named like the member of an anonymous type,
 /// through the naming policy, since no serializer context of the caller knows this type.

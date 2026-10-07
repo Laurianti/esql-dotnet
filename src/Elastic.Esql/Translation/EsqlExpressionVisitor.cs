@@ -27,6 +27,9 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 	// Tracks pending GroupJoin for combining with subsequent SelectMany (left outer join pattern)
 	private PendingGroupJoin? _pendingGroupJoin;
 
+	// Tracks the Selects that return a single value, and the column each leaves
+	private readonly ScalarSelectVisitor _scalarSelects = new();
+
 	private sealed record PendingGroupJoin(
 		Expression InnerSource,
 		LambdaExpression OuterKeySelector,
@@ -59,7 +62,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 	{
 		expression = new IndexedSelectVisitor().Visit(expression);
 		expression = new SelectMergingVisitor().Visit(expression);
-		expression = new ScalarSelectVisitor().Visit(expression);
+		expression = _scalarSelects.Visit(expression);
 		_ = Visit(expression);
 
 		if (_pendingGroupJoin is not null)
@@ -295,12 +298,13 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				return;
 			}
 
-			// A computed single value is projected as the member of a one-member row, into the result column.
+			// A computed single value is projected into the result column, as the member of a one-member row.
 			var isScalar = ScalarSelectVisitor.IsScalarSelector(lambda);
-			var projected = isScalar && ScalarSelectVisitor.IsComputed(lambda) ? ScalarSelectVisitor.WrapComputedSelector(lambda) : lambda;
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
-			var result = projectionVisitor.Translate(projected);
+			var result = isScalar && ScalarSelectVisitor.IsComputed(lambda)
+				? projectionVisitor.TranslateValue(lambda.Body, ScalarSelectVisitor.ResultMemberOf(lambda.ReturnType))
+				: projectionVisitor.Translate(lambda);
 
 			// From here the rows are whatever the selector built, not the document, unless
 			// the selector hands the row back as it is: an identity Select projects nothing
@@ -457,6 +461,9 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			if (selector is UnaryExpression unary && unary.Operand is LambdaExpression lambda)
 				fieldName = ExtractFieldName(lambda.Body);
 		}
+		// Sum(), Max() and the like after a Select returning a single value aggregate the column it is held in.
+		else if (_scalarSelects.SingleValueColumnOf(node.Arguments[0]) is { } column)
+			fieldName = ExtractFieldName(column);
 
 		var resultName = function.ToLowerInvariant();
 		Context.Commands.Add(new StatsCommand([$"{resultName} = {function}({fieldName})"]));

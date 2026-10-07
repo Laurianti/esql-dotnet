@@ -1026,4 +1026,48 @@ public class ScalarSelectExecutionTests : EsqlTestBase
 			| STATS max = MAX(duration)
 			""".NativeLineEndings());
 	}
+
+	[Test]
+	public void Max_AfterTimeOnlyField_AggregatesTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"max","type":"keyword"}],"values":[["10:30:00"]]}"""
+		};
+
+		var result = CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.At)
+			.Max();
+
+		_ = result.Should().Be(new TimeOnly(10, 30));
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM values
+			| KEEP at
+			| STATS max = MAX(at)
+			""".NativeLineEndings());
+	}
+
+	[Test]
+	public void Min_AfterDateOnlyField_AggregatesTheField()
+	{
+		var executor = new CapturingQueryExecutor
+		{
+			ResponseJson = /*lang=json,strict*/ """{"columns":[{"name":"min","type":"keyword"}],"values":[["2024-01-01"]]}"""
+		};
+
+		var result = CreateExecutableQuery<ValueTypeDocument>(executor)
+			.From("values")
+			.Select(d => d.Day)
+			.Min();
+
+		_ = result.Should().Be(new DateOnly(2024, 1, 1));
+		_ = executor.Calls[0].Esql.Should().Be(
+			"""
+			FROM values
+			| KEEP day
+			| STATS min = MIN(day)
+			""".NativeLineEndings());
+	}
 }
