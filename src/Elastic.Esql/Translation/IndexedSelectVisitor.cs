@@ -28,7 +28,7 @@ internal sealed class IndexedSelectVisitor : ExpressionVisitor
 			|| visited.Arguments[1] is not UnaryExpression { Operand: LambdaExpression { Parameters.Count: 2 } selector })
 			return visited;
 
-		if (new ParameterFinder(selector.Parameters[1]).IsReadIn(selector.Body))
+		if (ExpressionTranslationHelpers.ReadsParameter(selector.Body, selector.Parameters[1]))
 		{
 			throw new NotSupportedException(
 				"Select with the element index is not supported: the rows of an ES|QL query have no position to number.");
@@ -39,22 +39,5 @@ internal sealed class IndexedSelectVisitor : ExpressionVisitor
 			SelectDefinition.MakeGenericMethod(selector.Parameters[0].Type, selector.ReturnType),
 			visited.Arguments[0],
 			Expression.Quote(withoutIndex));
-	}
-
-	private sealed class ParameterFinder(ParameterExpression parameter) : ExpressionVisitor
-	{
-		private bool _found;
-
-		public bool IsReadIn(Expression expression)
-		{
-			_ = Visit(expression);
-			return _found;
-		}
-
-		protected override Expression VisitParameter(ParameterExpression node)
-		{
-			_found |= node == parameter;
-			return node;
-		}
 	}
 }

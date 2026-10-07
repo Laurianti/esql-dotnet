@@ -196,7 +196,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	}
 
 	private static Expression Substitute(LambdaExpression lambda, Expression replacement) =>
-		new ParameterReplacer(lambda.Parameters[0], replacement).Visit(lambda.Body);
+		ExpressionTranslationHelpers.ReplaceParameter(lambda.Body, lambda.Parameters[0], replacement)
+			?? throw new NotSupportedException("The lambda body could not be rewritten.");
 
 	private static LambdaExpression? ExtractLambda(MethodCallExpression node) =>
 		node.Arguments.Count >= 2 && node.Arguments[1] is UnaryExpression { Operand: LambdaExpression lambda } ? lambda : null;
@@ -219,12 +220,6 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		}
 
 		return current is ParameterExpression;
-	}
-
-	private sealed class ParameterReplacer(ParameterExpression parameter, Expression replacement) : ExpressionVisitor
-	{
-		protected override Expression VisitParameter(ParameterExpression node) =>
-			node == parameter ? replacement : base.VisitParameter(node);
 	}
 }
 
