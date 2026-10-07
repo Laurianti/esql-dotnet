@@ -194,8 +194,10 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			return folded;
 		}
 
+		// A lambda over the row takes it as its only parameter, or, in the predicate of Where, before the element index.
+		// A lambda with another second parameter, such as the result selector of GroupBy, is over something else.
 		var arguments = node.Arguments
-			.Select(a => a is UnaryExpression { Operand: LambdaExpression lambda } && lambda.Parameters.Count == 1
+			.Select(a => a is UnaryExpression { Operand: LambdaExpression lambda } && (lambda.Parameters.Count == 1 || name == nameof(Queryable.Where))
 				? Expression.Quote(Expression.Lambda(lambda.Type, Substitute(lambda, value.Column), lambda.Parameters))
 				: a)
 			.ToList();

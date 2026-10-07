@@ -1789,6 +1789,19 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_FieldThenGroupByWithResultSelector_KeepsTheTranslationMessage()
+	{
+		// the result selector takes the key, not the row, so the value is not put in its place
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.GroupBy(m => m.Length, (length, messages) => length)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("GroupBy with a result selector is not supported*");
+	}
+
+	[Test]
 	public void Select_FieldThenSelectMany_IsNotSupported()
 	{
 		var act = () => CreateQuery<LogEntry>()

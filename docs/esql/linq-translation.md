@@ -92,6 +92,8 @@ FROM logs-*
 | WHERE log.level == "ERROR"
 ```
 
+A predicate that reads the element index, as in `Where((l, i) => i < 10)`, is refused, since the rows of an ES|QL query have no position to number; one that only declares it is read as the predicate without it. The same holds for the selector of `Select` and the collection selector of the `SelectMany` in a left outer join.
+
 ### Null handling
 
 ```csharp
