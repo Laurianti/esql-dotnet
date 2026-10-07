@@ -8,6 +8,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Elastic.Esql.Core;
+using Elastic.Esql.Extensions;
 
 namespace Elastic.Esql.Translation;
 
@@ -71,6 +72,26 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	public Expression? SingleValueColumnOf(Expression source) =>
 		_singleValues.TryGetValue(source, out var value) ? value.Column : null;
 
+	/// <summary>
+	/// Refuses an operator that reads the single value of rows whose column is not known, such as the rows of a RawEsql
+	/// or a LookupJoin to a single-value type, or those after a Completion or a Fork: its operand would name no column.
+	/// The translation calls this once it has translated the source, so that a refusal of an operator before comes first.
+	/// </summary>
+	public void ThrowIfReadingAValueWithoutColumn(MethodCallExpression node)
+	{
+		if (node.Method.DeclaringType != typeof(Queryable) || node.Arguments.Count == 0 || !TranslatedOperators.Contains(node.Method.Name))
+			return;
+
+		var source = node.Arguments[0];
+		if (!_singleValues.ContainsKey(source) && HoldsASingleValue(source) && ReadsTheValue(node))
+		{
+			throw new NotSupportedException(
+				$"{node.Method.Name} cannot read the single value of these rows, whose column is not known after the operator "
+				+ "that produced them: project the value into a member, as in 'Select(l => new { Value = ... })', and read the member."
+			);
+		}
+	}
+
 	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
 	public static bool IsScalarSelector(LambdaExpression lambda) =>
 		lambda.Parameters.Count == 1
@@ -104,8 +125,19 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	{
 		var visited = (MethodCallExpression)base.VisitMethodCall(node);
 
-		if (visited.Method.DeclaringType != typeof(Queryable) || visited.Arguments.Count == 0)
+		if (visited.Arguments.Count == 0)
 			return visited;
+
+		// An extension method that leaves the rows as they are carries what they hold to the operators after it.
+		if (visited.Method.DeclaringType != typeof(Queryable))
+		{
+			if (_singleValues.TryGetValue(visited.Arguments[0], out var held) && KeepsTheRow(visited.Method))
+				_singleValues[visited] = held;
+			else if (_groupedAggregations.Contains(visited.Arguments[0]) && KeepsTheRow(visited.Method))
+				_ = _groupedAggregations.Add(visited);
+
+			return visited;
+		}
 
 		if (_singleValues.TryGetValue(visited.Arguments[0], out var value))
 			return TranslatedOperators.Contains(visited.Method.Name) ? Rewrite(visited, value) : visited;
@@ -179,10 +211,29 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		return rewritten;
 	}
 
-	// An operator that takes a lambda over the row, or an aggregate that, without one, aggregates the row itself.
+	// An operator with a lambda that reads the row, or an aggregate that, without a selector, aggregates the row itself.
+	// A Select that returns the row as it is, at most converted, names no column: the translation adds nothing for it.
 	private static bool ReadsTheValue(MethodCallExpression node) =>
-		node.Arguments.Skip(1).Any(a => a is UnaryExpression { Operand: LambdaExpression })
+		node.Arguments.Skip(1).Any(a => a is UnaryExpression { Operand: LambdaExpression lambda }
+			&& ExpressionTranslationHelpers.ReadsParameter(lambda.Body, lambda.Parameters[0])
+			&& !(node.Method.Name == nameof(Queryable.Select) && lambda.Body.UnwrapConvertExpressions() == lambda.Parameters[0]))
 		|| (SelectorAggregates.Contains(node.Method.Name) && node.Arguments.Count == 1);
+
+	// Rows whose element is a single value rather than an object.
+	private static bool HoldsASingleValue(Expression source) =>
+		TypeHelper.FindGenericType(typeof(IQueryable<>), source.Type) is { } queryable
+		&& TypeHelper.IsSingleValueType(queryable.GetGenericArguments()[0]);
+
+	// An extension method that leaves the rows as they are: one that carries query options, Keep, Drop, and RawEsql
+	// that keeps the element type. Their own selectors are translated as they were.
+	private static bool KeepsTheRow(MethodInfo method) =>
+		method.IsDefined(typeof(EsqlQueryOptionsMethodAttribute), inherit: false)
+		|| (method.DeclaringType == typeof(EsqlQueryableExtensions) && method.Name switch
+		{
+			nameof(EsqlQueryableExtensions.Keep) or nameof(EsqlQueryableExtensions.Drop) => true,
+			nameof(EsqlQueryableExtensions.RawEsql) => method.GetGenericArguments().Length == 1,
+			_ => false
+		});
 
 	private static Expression ColumnOf(LambdaExpression selector)
 	{

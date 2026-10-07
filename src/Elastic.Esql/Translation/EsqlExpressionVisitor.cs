@@ -102,6 +102,9 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 		if (node.Arguments.Count > 0)
 			_ = Visit(node.Arguments[0]);
 
+		// Only now, so that the refusal of an operator in the source comes first.
+		_scalarSelects.ThrowIfReadingAValueWithoutColumn(node);
+
 		var methodName = node.Method.Name;
 		var declaringType = node.Method.DeclaringType;
 		var isQueryableMethod = declaringType == typeof(Queryable);

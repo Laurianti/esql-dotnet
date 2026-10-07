@@ -376,6 +376,8 @@ query.Select(l => l.Duration * 3).Max()
 
 The column takes its name through the naming policy, as a member of an anonymous type does: `Result` without one.
 
+The column carries through `Keep`, `Drop`, a `RawEsql` fragment that keeps the element type, and the methods that carry query options. After a `Completion`, a `Fork` or a `Fuse`, or from a `RawEsql` or `LookupJoin` to a single-value type, the column is not known, so an operator that reads the value is refused: project the value into a member instead, as in `Select(l => new { Value = l.Duration * 3 })`.
+
 ### Conditional projections
 
 The ternary operator translates to `CASE`:

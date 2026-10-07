@@ -205,6 +205,61 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Identity_AfterSingleAggregation_IsTranslated()
+	{
+		var esql = CountByLevel().Select(c => c).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void IdentityThroughAConversion_AfterTakeAfterSingleAggregation_IsTranslated()
+	{
+		var esql = CountByLevel().Take(5).Select(c => (long)c).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | LIMIT 5
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void WhereNotReadingTheValue_AfterSingleAggregation_IsTranslated()
+	{
+		var esql = CountByLevel().Where(c => true).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | WHERE true
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments(nameof(Queryable.First), "| LIMIT 1")]
+	[Arguments(nameof(Queryable.FirstOrDefault), "| LIMIT 1")]
+	[Arguments(nameof(Queryable.Single), "| LIMIT 2")]
+	[Arguments(nameof(Queryable.SingleOrDefault), "| LIMIT 2")]
+	[Arguments(nameof(Queryable.Count), "| STATS count = COUNT(*)")]
+	[Arguments(nameof(Queryable.LongCount), "| STATS count = COUNT(*)")]
+	[Arguments(nameof(Queryable.Any), "| STATS result = COUNT(*)\n| EVAL result = result > 0")]
+	public void TerminalWithPredicateNotReadingTheValue_AfterSingleAggregation_IsTranslated(string method, string tail)
+	{
+		Expression<Func<int, bool>> predicate = c => true;
+
+		var esql = Translate(method, predicate);
+
+		_ = esql.Should().Be(("FROM logs-*\n| STATS count = COUNT(*) BY log.level\n| WHERE true\n" + tail).NativeLineEndings());
+	}
+
+	[Test]
 	[Arguments(nameof(Queryable.Sum))]
 	[Arguments(nameof(Queryable.Average))]
 	[Arguments(nameof(Queryable.Min))]
