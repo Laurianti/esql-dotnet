@@ -92,15 +92,20 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		}
 	}
 
-	/// <summary>A selector returning a single value: a field, or a value computed from the row.</summary>
-	public static bool IsScalarSelector(LambdaExpression lambda) =>
-		lambda.Parameters.Count == 1
-		&& TypeHelper.IsSingleValueType(lambda.ReturnType)
-		&& lambda.Body is not NewExpression and not MemberInitExpression
-		&& lambda.Body.UnwrapConvertExpressions() != lambda.Parameters[0];
+	/// <summary>
+	/// How a selector returns a single value: as a field it reads, or as a value it computes from the row. A selector
+	/// that returns an object, or the row itself, returns none.
+	/// </summary>
+	public static ScalarSelectorKind Classify(LambdaExpression selector)
+	{
+		if (selector.Parameters.Count != 1
+			|| !TypeHelper.IsSingleValueType(selector.ReturnType)
+			|| selector.Body is NewExpression or MemberInitExpression
+			|| selector.Body.UnwrapConvertExpressions() == selector.Parameters[0])
+			return ScalarSelectorKind.None;
 
-	/// <summary>A single-value selector that computes its value rather than reading a field.</summary>
-	public static bool IsComputed(LambdaExpression singleValueSelector) => !IsFieldPath(singleValueSelector.Body);
+		return IsFieldPath(selector.Body) ? ScalarSelectorKind.Field : ScalarSelectorKind.Computed;
+	}
 
 	/// <summary>
 	/// The <c>Result</c> member of <c>ScalarRow&lt;T&gt;</c> for a value type, the column a computed single value is
@@ -159,7 +164,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			return visited;
 		}
 
-		if (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } selector && IsScalarSelector(selector))
+		if (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } selector
+			&& Classify(selector) is var kind and not ScalarSelectorKind.None)
 		{
 			// Only a call on the group, such as g.Count() or g.Sum(x => x.Duration): any other selector after a GroupBy,
 			// g.Key.ToUpper() among them, is refused there with a message of its own.
@@ -170,7 +176,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 					_ = _groupedAggregations.Add(visited);
 			}
 			else
-				_singleValues[visited] = new SingleValue(selector, ColumnOf(selector));
+				_singleValues[visited] = new SingleValue(selector, ColumnOf(selector, kind));
 		}
 
 		return visited;
@@ -193,8 +199,8 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			var lambdaType = method.GetParameters()[1].ParameterType.GetGenericArguments()[0];
 			var composed = Expression.Lambda(lambdaType, Substitute(outer, value.Selector.Body), value.Selector.Parameters);
 			var folded = Expression.Call(method, source, Expression.Quote(composed));
-			if (IsScalarSelector(composed))
-				_singleValues[folded] = new SingleValue(composed, ColumnOf(composed));
+			if (Classify(composed) is var kind and not ScalarSelectorKind.None)
+				_singleValues[folded] = new SingleValue(composed, ColumnOf(composed, kind));
 			return folded;
 		}
 
@@ -216,8 +222,9 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			_singleValues[rewritten] = value;
 
 		// A Select further down that again returns a single value leaves a column of its own.
-		else if (name == nameof(Queryable.Select) && ExtractLambda(rewritten) is { } selector && IsScalarSelector(selector))
-			_singleValues[rewritten] = new SingleValue(selector, ColumnOf(selector));
+		else if (name == nameof(Queryable.Select) && ExtractLambda(rewritten) is { } selector
+			&& Classify(selector) is var kind and not ScalarSelectorKind.None)
+			_singleValues[rewritten] = new SingleValue(selector, ColumnOf(selector, kind));
 
 		return rewritten;
 	}
@@ -246,9 +253,10 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 			_ => false
 		});
 
-	private static Expression ColumnOf(LambdaExpression selector)
+	// The column that holds the single value of a selector: the field it reads, or the result column it computes.
+	private static Expression ColumnOf(LambdaExpression selector, ScalarSelectorKind kind)
 	{
-		if (IsFieldPath(selector.Body))
+		if (kind == ScalarSelectorKind.Field)
 			return selector.Body;
 
 		// The column is the Result member the value is projected into, read off a row of that type.
@@ -283,6 +291,19 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 		return current is ParameterExpression;
 	}
+}
+
+/// <summary>How a Select selector returns a single value, as <see cref="ScalarSelectVisitor.Classify"/> tells.</summary>
+internal enum ScalarSelectorKind
+{
+	/// <summary>The selector returns an object, or the row itself.</summary>
+	None,
+
+	/// <summary>The selector reads a field, whose column then holds the value.</summary>
+	Field,
+
+	/// <summary>The selector computes the value from the row, into the result column.</summary>
+	Computed
 }
 
 /// <summary>

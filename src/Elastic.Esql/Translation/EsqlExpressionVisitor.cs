@@ -302,10 +302,10 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			}
 
 			// A computed single value is projected into the result column, as the member of a one-member row.
-			var isScalar = ScalarSelectVisitor.IsScalarSelector(lambda);
+			var kind = ScalarSelectVisitor.Classify(lambda);
 
 			var projectionVisitor = new SelectProjectionVisitor(Context);
-			var result = isScalar && ScalarSelectVisitor.IsComputed(lambda)
+			var result = kind == ScalarSelectorKind.Computed
 				? projectionVisitor.TranslateValue(lambda.Body, ScalarSelectVisitor.ResultMemberOf(lambda.ReturnType))
 				: projectionVisitor.Translate(lambda);
 
@@ -315,7 +315,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			// since within this selector the parameter is still the row that came before.
 			Context.HasProjected |= !IsIdentitySelector(lambda);
 
-			ProjectionEmitter.Emit(result, retainMetadata: !isScalar);
+			ProjectionEmitter.Emit(result, retainMetadata: kind == ScalarSelectorKind.None);
 		}
 	}
 
