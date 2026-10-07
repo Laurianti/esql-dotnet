@@ -186,10 +186,12 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		if (name == nameof(Queryable.Select) && ExtractLambda(node) is { } outer
 			&& node.Arguments[0] is MethodCallExpression inner && ExtractLambda(inner) == value.Selector)
 		{
-			var composed = Expression.Lambda(Substitute(outer, value.Selector.Body), value.Selector.Parameters);
 			var source = inner.Arguments[0];
 			var method = node.Method.GetGenericMethodDefinition()
 				.MakeGenericMethod(value.Selector.Parameters[0].Type, outer.ReturnType);
+			// The lambda keeps the type the Select declares: its body may be of a type derived from it, such as string for object.
+			var lambdaType = method.GetParameters()[1].ParameterType.GetGenericArguments()[0];
+			var composed = Expression.Lambda(lambdaType, Substitute(outer, value.Selector.Body), value.Selector.Parameters);
 			var folded = Expression.Call(method, source, Expression.Quote(composed));
 			if (IsScalarSelector(composed))
 				_singleValues[folded] = new SingleValue(composed, ColumnOf(composed));
@@ -204,6 +206,11 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 				: a)
 			.ToList();
 		var rewritten = node.Update(node.Object, arguments);
+
+		// A Select that returns the value as it is, of the same type, adds nothing: the rows go on as they are.
+		if (name == nameof(Queryable.Select) && ExtractLambda(rewritten)?.Body == value.Column
+			&& node.Method.GetGenericArguments() is [var from, var to] && from == to)
+			return node.Arguments[0];
 
 		if (RowPreservingOperators.Contains(name))
 			_singleValues[rewritten] = value;

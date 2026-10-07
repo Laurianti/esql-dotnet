@@ -767,6 +767,38 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_FieldThenIdentityToABaseType_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Select<string, object>(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenIdentityToAnInterface_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Select<string, IComparable>(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Select_ComputedThenIdentity_KeepsTheResult()
 	{
 		var esql = CreateQuery<LogEntry>()
@@ -856,7 +888,6 @@ public class ScalarSelectTests : EsqlTestBase
             | EVAL result = (duration * 3.0)
             | KEEP result
             | WHERE result > 1.0
-            | KEEP result
             """.NativeLineEndings());
 	}
 
@@ -1843,7 +1874,6 @@ public class ScalarSelectTests : EsqlTestBase
             FROM logs-*
             | KEEP message
             | WHERE message == "ab"
-            | KEEP message
             """.NativeLineEndings());
 	}
 
@@ -1863,7 +1893,6 @@ public class ScalarSelectTests : EsqlTestBase
             FROM logs-*
             | KEEP message
             | WHERE message == "ab"
-            | KEEP message
             | WHERE message != "cd"
             """.NativeLineEndings());
 	}
@@ -1902,7 +1931,6 @@ public class ScalarSelectTests : EsqlTestBase
             FROM logs-*
             | KEEP log.level
             | WHERE log.level == "ab"
-            | KEEP log.level
             """.NativeLineEndings());
 	}
 
@@ -1921,7 +1949,6 @@ public class ScalarSelectTests : EsqlTestBase
             FROM docs
             | KEEP host.name
             | WHERE host.name == "ab"
-            | KEEP host.name
             """.NativeLineEndings());
 	}
 
@@ -1942,6 +1969,78 @@ public class ScalarSelectTests : EsqlTestBase
             | KEEP message
             | SORT message
             | LIMIT 3
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenOrderByThenIdentity_KeepsTheSort()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.OrderBy(m => m)
+			.Select(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | SORT message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenRawEsqlThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.RawEsql("LIMIT 10")
+			.Select(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | LIMIT 10
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_NullableFieldThenWhereThenIdentity_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (int?)l.StatusCode)
+			.Where(s => s > 1)
+			.Select(s => s)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP statusCode
+            | WHERE statusCode > 1
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenIdentityToABaseType_KeepsTheSelect()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(m => m == "ab")
+			.Select<string, object>(m => m)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message == "ab"
             | KEEP message
             """.NativeLineEndings());
 	}
