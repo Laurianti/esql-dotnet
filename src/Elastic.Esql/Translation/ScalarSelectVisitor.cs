@@ -333,10 +333,12 @@ internal enum ScalarSelectorKind
 /// </summary>
 /// <remarks>
 /// Marked as compiler-generated so that its member is named like the member of an anonymous type,
-/// through the naming policy, since no serializer context of the caller knows this type.
+/// through the naming policy, since no serializer context of the caller knows this type. The member is
+/// nullable, as a computed value can be: a predicate on it then treats null as it does for a member of an
+/// anonymous type.
 /// </remarks>
 [CompilerGenerated]
 internal sealed class ScalarRow<T>
 {
-	public T Result { get; set; } = default!;
+	public T? Result { get; set; }
 }

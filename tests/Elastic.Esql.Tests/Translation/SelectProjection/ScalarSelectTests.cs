@@ -434,6 +434,115 @@ public class ScalarSelectTests : EsqlTestBase
             """.NativeLineEndings());
 	}
 
+	// A computed string can be null, as the member of an anonymous type can: an ordering comparison says how it treats null.
+
+	[Test]
+	public void Select_ComputedStringThenOrdinalLessThan_KeepsTheNullRows()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message.ToUpperInvariant())
+			.Where(s => string.CompareOrdinal(s, "m") < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = TO_UPPER(message)
+            | KEEP result
+            | WHERE (result IS NULL OR result < "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedStringThenOrdinalGreaterThan_LeavesOutTheNullRows()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message.ToUpperInvariant())
+			.Where(s => string.CompareOrdinal(s, "m") > 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = TO_UPPER(message)
+            | KEEP result
+            | WHERE (result IS NOT NULL AND result > "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedStringThenOrdinalCompareAtMost_KeepsTheNullRows()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message.ToUpperInvariant())
+			.Where(s => string.Compare(s, "m", StringComparison.Ordinal) <= 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = TO_UPPER(message)
+            | KEEP result
+            | WHERE (result IS NULL OR result <= "m")
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedStringThenNotEqual_ComparesAsBefore()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message.ToUpperInvariant())
+			.Where(s => s != "a")
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = TO_UPPER(message)
+            | KEEP result
+            | WHERE result != "a"
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedNumberThenGreaterThan_ComparesAsBefore()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.StatusCode * 2)
+			.Where(x => x > 1)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (statusCode * 2)
+            | KEEP result
+            | WHERE result > 1
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenOrdinalLessThan_FollowsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Message)
+			.Where(s => string.CompareOrdinal(s, "m") < 0)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            | WHERE message < "m"
+            """.NativeLineEndings());
+	}
+
 	[Test]
 	public void Select_IntegerFieldThenWhere_FiltersOnTheField()
 	{
