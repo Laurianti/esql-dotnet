@@ -232,6 +232,87 @@ public class GroupBySingleAggregationTests : EsqlTestBase
 	}
 
 	[Test]
+	public void IdentityThenWhere_AfterSingleAggregation_IsNotSupported()
+	{
+		var act = () => CountByLevel().Select(c => c).Where(x => x > 1).ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("A single aggregation after GroupBy cannot be followed by Where*");
+	}
+
+	[Test]
+	public void IdentityThroughAConversionThenMax_AfterSingleAggregation_IsNotSupported()
+	{
+		var act = () => new EsqlFormatter().Format(QueryProvider.TranslateExpression(
+			Expression.Call(typeof(Queryable), nameof(Queryable.Max), [typeof(long)], CountByLevel().Select(c => (long)c).Expression),
+			inlineParameters: true
+		));
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("A single aggregation after GroupBy cannot be followed by Max*");
+	}
+
+	[Test]
+	public void SelectNotReadingTheValue_AfterSingleAggregation_LeavesItsColumn()
+	{
+		var esql = CountByLevel().Select(c => 1).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | EVAL result = 1
+            | KEEP result
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void SelectNotReadingTheValueThenWhere_AfterSingleAggregation_FiltersOnItsColumn()
+	{
+		var esql = CountByLevel().Select(c => 1).Where(x => x > 0).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | EVAL result = 1
+            | KEEP result
+            | WHERE result > 0
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void SelectNotReadingTheValueThenMax_AfterSingleAggregation_AggregatesItsColumn()
+	{
+		var esql = new EsqlFormatter().Format(QueryProvider.TranslateExpression(
+			Expression.Call(typeof(Queryable), nameof(Queryable.Max), [typeof(int)], CountByLevel().Select(c => 1).Expression),
+			inlineParameters: true
+		));
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | EVAL result = 1
+            | KEEP result
+            | STATS max = MAX(result)
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void ObjectNotReadingTheValueThenWhere_AfterSingleAggregation_FiltersOnItsMember()
+	{
+		var esql = CountByLevel().Select(c => new { V = 1 }).Where(x => x.V > 0).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | EVAL v = 1
+            | KEEP v
+            | WHERE v > 0
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void WhereNotReadingTheValue_AfterSingleAggregation_IsTranslated()
 	{
 		var esql = CountByLevel().Where(c => true).ToString();

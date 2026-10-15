@@ -179,10 +179,15 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 				);
 			}
 
-			if (RowPreservingOperators.Contains(visited.Method.Name))
+			// A Select that returns the value as it is, at most converted, keeps the aggregation; any other Select reads
+			// nothing of it, and below leaves a column of its own, as after any rows.
+			if (RowPreservingOperators.Contains(visited.Method.Name)
+				|| (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } identity
+					&& identity.Body.UnwrapConvertExpressions() == identity.Parameters[0]))
 				_ = _groupedAggregations.Add(visited);
 
-			return visited;
+			if (visited.Method.Name != nameof(Queryable.Select))
+				return visited;
 		}
 
 		if (visited.Method.Name == nameof(Queryable.Select) && ExtractLambda(visited) is { } selector
