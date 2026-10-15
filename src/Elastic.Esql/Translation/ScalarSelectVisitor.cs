@@ -197,7 +197,7 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		{
 			// Only a call on the group, such as g.Count() or g.Sum(x => x.Duration): any other selector after a GroupBy,
 			// g.Key.ToUpper() among them, is refused there with a message of its own.
-			if (visited.Arguments[0] is MethodCallExpression { Method.Name: nameof(Queryable.GroupBy) })
+			if (IsGroupBy(visited.Arguments[0]))
 			{
 				if (selector.Body.UnwrapConvertExpressions() is MethodCallExpression { Object: null, Arguments: [var group, ..] }
 					&& group == selector.Parameters[0])
@@ -269,6 +269,15 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	private static bool HoldsASingleValue(Expression source) =>
 		TypeHelper.FindGenericType(typeof(IQueryable<>), source.Type) is { } queryable
 		&& TypeHelper.IsSingleValueType(queryable.GetGenericArguments()[0]);
+
+	// A GroupBy, also behind the extension methods that keep its rows, such as one that carries query options.
+	private static bool IsGroupBy(Expression source)
+	{
+		while (source is MethodCallExpression { Arguments.Count: > 0 } call && KeepsTheRow(call.Method))
+			source = call.Arguments[0];
+
+		return source is MethodCallExpression { Method.Name: nameof(Queryable.GroupBy) };
+	}
 
 	// An extension method that leaves the rows as they are: one that carries query options, Keep, Drop, and RawEsql
 	// that keeps the element type. Their own selectors are translated as they were.

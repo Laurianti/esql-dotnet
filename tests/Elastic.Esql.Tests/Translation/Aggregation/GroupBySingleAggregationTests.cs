@@ -4,6 +4,7 @@
 
 using System.Linq.Expressions;
 using Elastic.Esql.Generation;
+using Elastic.Esql.Tests.Translation.SelectProjection;
 
 namespace Elastic.Esql.Tests.Translation.Aggregation;
 
@@ -310,6 +311,58 @@ public class GroupBySingleAggregationTests : EsqlTestBase
             | KEEP v
             | WHERE v > 0
             """.NativeLineEndings());
+	}
+
+	// A method that keeps the rows, between GroupBy and its Select, leaves the aggregation as it is.
+
+	[Test]
+	public void OptionsBeforeTheSingleAggregationThenWhere_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.WithQueryableOptions(new TestQueryOptions(TimeZone: "UTC"))
+			.Select(g => g.Count())
+			.Where(c => c > 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("A single aggregation after GroupBy cannot be followed by Where*");
+	}
+
+	[Test]
+	public void OptionsBeforeTheSingleAggregationThenTake_LimitsTheGroups()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.WithQueryableOptions(new TestQueryOptions(TimeZone: "UTC"))
+			.Select(g => g.Count())
+			.Take(5)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | STATS count = COUNT(*) BY log.level
+            | LIMIT 5
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void OptionsBeforeTheSingleAggregationThenMax_IsNotSupported()
+	{
+		var counts = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.GroupBy(l => l.Level)
+			.WithQueryableOptions(new TestQueryOptions(TimeZone: "UTC"))
+			.Select(g => g.Count());
+
+		var act = () => new EsqlFormatter().Format(QueryProvider.TranslateExpression(
+			Expression.Call(typeof(Queryable), nameof(Queryable.Max), [typeof(int)], counts.Expression),
+			inlineParameters: true
+		));
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("A single aggregation after GroupBy cannot be followed by Max*");
 	}
 
 	[Test]
