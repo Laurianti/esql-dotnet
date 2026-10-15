@@ -121,6 +121,47 @@ public class SingleValueWithoutColumnTests : EsqlTestBase
 		_ = act.Should().Throw<NotSupportedException>().WithMessage($"{method} cannot read the single value*");
 	}
 
+	[Test]
+	[Arguments(nameof(Enumerable.Sum))]
+	[Arguments(nameof(Enumerable.Average))]
+	[Arguments(nameof(Enumerable.Min))]
+	[Arguments(nameof(Enumerable.Max))]
+	public void AggregateOfAGroup_IsNotSupported(string method)
+	{
+		var grouped = Durations().GroupBy(x => 1);
+
+		var act = () => method switch
+		{
+			nameof(Enumerable.Sum) => grouped.Select(g => new { V = g.Sum() }).ToString(),
+			nameof(Enumerable.Average) => grouped.Select(g => new { V = g.Average() }).ToString(),
+			nameof(Enumerable.Min) => grouped.Select(g => new { V = g.Min() }).ToString(),
+			_ => grouped.Select(g => new { V = g.Max() }).ToString()
+		};
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage($"{method} cannot read the single value of these rows*");
+	}
+
+	[Test]
+	public void SingleAggregationOfAGroup_IsNotSupported()
+	{
+		var act = () => Durations().GroupBy(x => 1).Select(g => g.Sum()).ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("Sum cannot read the single value of these rows*");
+	}
+
+	[Test]
+	public void CountOfAGroup_IsTranslated()
+	{
+		var esql = Durations().GroupBy(x => 1).Select(g => new { N = g.Count() }).ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL x = duration | KEEP x
+            | STATS n = COUNT(*)
+            """.NativeLineEndings());
+	}
+
 	// An operator that does not read the value is translated as before.
 
 	[Test]

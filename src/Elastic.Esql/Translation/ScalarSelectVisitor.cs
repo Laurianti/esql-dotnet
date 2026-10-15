@@ -84,13 +84,15 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 		var source = node.Arguments[0];
 		if (!_singleValues.ContainsKey(source) && HoldsASingleValue(source) && ReadsTheValue(node))
-		{
-			throw new NotSupportedException(
-				$"{node.Method.Name} cannot read the single value of these rows, whose column is not known after the operator "
-				+ "that produced them: project the value into a member, as in 'Select(l => new { Value = ... })', and read the member."
-			);
-		}
+			throw ValueWithoutColumn(node.Method.Name);
 	}
+
+	/// <summary>The refusal of an operator that reads a single value whose column is not known.</summary>
+	public static NotSupportedException ValueWithoutColumn(string operatorName) =>
+		new(
+			$"{operatorName} cannot read the single value of these rows, whose column is not known after the operator "
+			+ "that produced them: project the value into a member, as in 'Select(l => new { Value = ... })', and read the member."
+		);
 
 	/// <summary>
 	/// Refuses a selector that computes a single value but returns it as another type, such as <c>object</c>: the

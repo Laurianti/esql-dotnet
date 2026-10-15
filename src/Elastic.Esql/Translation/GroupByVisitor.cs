@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information
 
 using System.Linq.Expressions;
+using Elastic.Esql.Core;
 using Elastic.Esql.Extensions;
 using Elastic.Esql.Functions;
 using Elastic.Esql.QueryModel.Commands;
@@ -291,6 +292,13 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 			// A parameterless aggregation on IGrouping<K, TElement> aggregates the elements:
 			// those of the GroupBy element selector, or the single value of the rows.
 			fieldExpr = ExtractFieldFromLambdaBody(_element.UnwrapConvertExpressions());
+		}
+		else if (methodName is "Sum" or "Average" or "Min" or "Max"
+			&& TypeHelper.FindGenericType(typeof(IEnumerable<>), methodCall.Arguments[0].Type) is { } elements
+			&& TypeHelper.IsSingleValueType(elements.GetGenericArguments()[0]))
+		{
+			// The elements are single values whose column is not known, as those of a RawEsql to a single-value type.
+			throw ScalarSelectVisitor.ValueWithoutColumn(methodName);
 		}
 
 		return methodName switch
