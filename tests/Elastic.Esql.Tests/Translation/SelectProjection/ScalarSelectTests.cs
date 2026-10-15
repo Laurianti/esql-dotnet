@@ -311,6 +311,130 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_ComputedThenGroupByThenSum_AggregatesTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.GroupBy(x => x)
+			.Select(g => new { g.Key, Total = g.Sum() })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | STATS total = SUM(result) BY key = result
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldThenGroupByThenMax_AggregatesTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.GroupBy(x => x)
+			.Select(g => new { g.Key, Max = g.Max() })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP duration
+            | STATS max = MAX(duration) BY key = duration
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	[Arguments(nameof(Enumerable.Sum), "SUM")]
+	[Arguments(nameof(Enumerable.Average), "AVG")]
+	[Arguments(nameof(Enumerable.Min), "MIN")]
+	[Arguments(nameof(Enumerable.Max), "MAX")]
+	public void Select_FieldThenWhereThenGroupByThenAggregate_AggregatesTheField(string method, string function)
+	{
+		var grouped = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.Where(x => x > 1)
+			.GroupBy(x => x);
+
+		var esql = method switch
+		{
+			nameof(Enumerable.Sum) => grouped.Select(g => new { g.Key, V = g.Sum() }).ToString(),
+			nameof(Enumerable.Average) => grouped.Select(g => new { g.Key, V = g.Average() }).ToString(),
+			nameof(Enumerable.Min) => grouped.Select(g => new { g.Key, V = g.Min() }).ToString(),
+			_ => grouped.Select(g => new { g.Key, V = g.Max() }).ToString()
+		};
+
+		_ = esql.Should().Be(
+			$"""
+            FROM logs-*
+            | KEEP duration
+            | WHERE duration > 1.0
+            | STATS v = {function}(duration) BY key = duration
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedThenGroupByWithIdentityElementThenSum_AggregatesTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.GroupBy(x => x, x => x)
+			.Select(g => new { g.Key, Total = g.Sum() })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | STATS total = SUM(result) BY key = result
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedThenGroupByThenCount_CountsTheRows()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.GroupBy(x => x)
+			.Select(g => new { g.Key, Count = g.Count() })
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | STATS count = COUNT(*) BY key = result
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedThenGroupByThenSingleSum_AggregatesTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.GroupBy(x => x)
+			.Select(g => g.Sum())
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | STATS sum = SUM(result) BY result
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Select_IntegerFieldThenWhere_FiltersOnTheField()
 	{
 		var esql = CreateQuery<LogEntry>()

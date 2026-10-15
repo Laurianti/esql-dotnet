@@ -16,14 +16,17 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 {
 	private const string SingleKeyMarker = "__single_key__";
 	private readonly EsqlTranslationContext _context = context ?? throw new ArgumentNullException(nameof(context));
-	private LambdaExpression? _elementSelector;
+	private Expression? _element;
 
 	/// <summary>
 	/// Translates a GroupBy with result selector (from subsequent Select) to a STATS command.
 	/// </summary>
-	public StatsCommand Translate(LambdaExpression keySelector, LambdaExpression resultSelector, LambdaExpression? elementSelector = null)
+	/// <param name="keySelector">The key selector of the GroupBy.</param>
+	/// <param name="resultSelector">The selector of the Select that follows it.</param>
+	/// <param name="element">The field each element of a group reads, when it is not the row itself.</param>
+	public StatsCommand Translate(LambdaExpression keySelector, LambdaExpression resultSelector, Expression? element = null)
 	{
-		_elementSelector = elementSelector;
+		_element = element;
 
 		var groupByFields = ExtractGroupByFields(keySelector.Body);
 		var keyPropertyNames = ExtractKeyPropertyNames(keySelector.Body);
@@ -283,11 +286,11 @@ internal sealed class GroupByVisitor(EsqlTranslationContext context) : Expressio
 			var selector = methodCall.Arguments[1];
 			fieldExpr = ExtractFieldFromSelector(selector);
 		}
-		else if (_elementSelector is not null && methodName is "Sum" or "Average" or "Min" or "Max")
+		else if (_element is not null && methodName is "Sum" or "Average" or "Min" or "Max")
 		{
-			// A parameterless aggregation on IGrouping<K, TElement> aggregates the elements
-			// produced by the GroupBy element selector.
-			fieldExpr = ExtractFieldFromLambdaBody(_elementSelector.Body.UnwrapConvertExpressions());
+			// A parameterless aggregation on IGrouping<K, TElement> aggregates the elements:
+			// those of the GroupBy element selector, or the single value of the rows.
+			fieldExpr = ExtractFieldFromLambdaBody(_element.UnwrapConvertExpressions());
 		}
 
 		return methodName switch

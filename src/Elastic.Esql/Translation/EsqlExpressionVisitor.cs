@@ -22,7 +22,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 	private LambdaExpression? _pendingGroupByKeySelector;
 
 	// Tracks pending GroupBy element selector, applied to parameterless Sum/Average/Min/Max in the subsequent Select
-	private LambdaExpression? _pendingGroupByElementSelector;
+	private Expression? _pendingGroupByElement;
 
 	// Tracks pending GroupJoin for combining with subsequent SelectMany (left outer join pattern)
 	private PendingGroupJoin? _pendingGroupJoin;
@@ -293,10 +293,10 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			if (_pendingGroupByKeySelector != null)
 			{
 				var groupByVisitor = new GroupByVisitor(Context);
-				var statsCommand = groupByVisitor.Translate(_pendingGroupByKeySelector, lambda, _pendingGroupByElementSelector);
+				var statsCommand = groupByVisitor.Translate(_pendingGroupByKeySelector, lambda, _pendingGroupByElement);
 				Context.Commands.Add(statsCommand);
 				_pendingGroupByKeySelector = null;
-				_pendingGroupByElementSelector = null;
+				_pendingGroupByElement = null;
 				ClearMetadataAfterStats();
 				return;
 			}
@@ -517,7 +517,8 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 				"Project the key and aggregations in a subsequent Select instead, " +
 				"e.g. '.GroupBy(x => x.Field).Select(g => new { g.Key, Count = g.Count() })'.");
 
-		LambdaExpression? elementSelector = null;
+		// The rows of a single value group that value, in the column that holds it.
+		var element = _scalarSelects.SingleValueColumnOf(node.Arguments[0]);
 
 		if (node.Arguments.Count > 2)
 		{
@@ -547,14 +548,14 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 						"GroupBy element selectors are limited to a single field access (e.g. '.GroupBy(x => x.Key, x => x.Field)'); " +
 						"project composite values in a subsequent Select instead.");
 
-				elementSelector = extraLambda;
+				element = extraLambda.Body;
 			}
 		}
 
 		// Store the selectors for combining with the subsequent Select into STATS...BY.
 		// Overwrite unconditionally: a later GroupBy without an element selector must not inherit a stale one.
 		_pendingGroupByKeySelector = lambda;
-		_pendingGroupByElementSelector = elementSelector;
+		_pendingGroupByElement = element;
 	}
 
 	private void VisitFrom(MethodCallExpression node)
