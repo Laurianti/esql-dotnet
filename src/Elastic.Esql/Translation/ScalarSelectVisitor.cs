@@ -93,6 +93,26 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	}
 
 	/// <summary>
+	/// Refuses a selector that computes a single value but returns it as another type, such as <c>object</c>: the
+	/// value is read back only as its own type, so the rows would lose it. A field returned as another type is read as
+	/// before.
+	/// </summary>
+	public static void ThrowIfComputedAsAnotherType(LambdaExpression selector)
+	{
+		if (selector.Parameters.Count != 1 || TypeHelper.IsSingleValueType(selector.ReturnType))
+			return;
+
+		var value = selector.Body.UnwrapConvertExpressions();
+		if (TypeHelper.IsSingleValueType(value.Type) && value is not ParameterExpression && !IsFieldPath(value))
+		{
+			throw new NotSupportedException(
+				$"A Select that computes a single value cannot return it as {selector.ReturnType.Name}: the value is read "
+				+ "back only as its own type. Return it as it is, as in 'Select(l => l.Duration * 3)', or project it into a member."
+			);
+		}
+	}
+
+	/// <summary>
 	/// How a selector returns a single value: as a field it reads, or as a value it computes from the row. A selector
 	/// that returns an object, or the row itself, returns none.
 	/// </summary>

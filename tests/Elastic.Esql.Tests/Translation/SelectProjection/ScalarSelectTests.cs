@@ -767,6 +767,118 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_ComputedThenBoxed_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.Select(x => (object)x)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that computes a single value cannot return it as Object*");
+	}
+
+	[Test]
+	public void Select_ComputedBoxed_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (object)(l.Duration * 3))
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that computes a single value cannot return it as Object*");
+	}
+
+	[Test]
+	public void Select_MemberOfAValueBoxed_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (object)l.Timestamp.Hour)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that computes a single value cannot return it as Object*");
+	}
+
+	[Test]
+	public void Select_ComputedStringAsAnInterface_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select<LogEntry, IComparable>(l => l.Message.ToUpperInvariant())
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that computes a single value cannot return it as IComparable*");
+	}
+
+	[Test]
+	public void Select_ConstructedSingleValue_IsNotTakenForAnotherType()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => new DateTime(2020, 1, 1))
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.Which.Message.Should().NotStartWith("A Select that computes a single value");
+	}
+
+	[Test]
+	public void Select_FieldBoxed_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (object)l.Message)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP message
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedThenWhereThenBoxed_KeepsTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.Where(x => x > 1)
+			.Select(x => (object)x)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            | WHERE result > 1.0
+            | KEEP result
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_ComputedAsNullable_EvaluatesTheResult()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (double?)(l.Duration * 3))
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | EVAL result = (duration * 3.0)
+            | KEEP result
+            """.NativeLineEndings());
+	}
+
+	[Test]
 	public void Select_FieldThenIdentityToABaseType_KeepsTheField()
 	{
 		var esql = CreateQuery<LogEntry>()
