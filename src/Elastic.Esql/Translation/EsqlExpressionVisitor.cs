@@ -302,6 +302,7 @@ internal sealed class EsqlExpressionVisitor(EsqlQueryProvider provider, bool inl
 			}
 
 			// A computed single value is projected into the result column, as the member of a one-member row.
+			ScalarSelectVisitor.ThrowIfConversionChangesTheValue(lambda);
 			var kind = ScalarSelectVisitor.Classify(lambda);
 			if (kind == ScalarSelectorKind.None)
 				ScalarSelectVisitor.ThrowIfComputedAsAnotherType(lambda);

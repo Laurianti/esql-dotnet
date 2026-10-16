@@ -1109,6 +1109,176 @@ public class ScalarSelectTests : EsqlTestBase
 			.Which.Message.Should().NotStartWith("A Select that computes a single value");
 	}
 
+	// A conversion to an integral type that cannot hold every value of the source changes the value, as truncation does.
+
+	[Test]
+	public void Select_FieldTruncatedThenWhere_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (int)l.Duration)
+			.Where(x => x == 2)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldTruncated_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (int)l.Duration)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_ComputedTruncated_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (long)(l.Duration * 3))
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int64 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldTruncatedThenWidened_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (long)(int)l.Duration)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldNarrowedToAShorterInteger_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (short)l.StatusCode)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Int32 to Int16 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldToUnsigned_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (uint)l.StatusCode)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Int32 to UInt32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldTruncatedToNullable_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (int?)l.Duration)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	[Arguments("long")]
+	[Arguments("double")]
+	[Arguments("decimal")]
+	[Arguments("int?")]
+	public void Select_FieldWidened_KeepsTheField(string target)
+	{
+		var query = CreateQuery<LogEntry>().From("logs-*");
+
+		var esql = target switch
+		{
+			"long" => query.Select(l => (long)l.StatusCode).ToString(),
+			"double" => query.Select(l => (double)l.StatusCode).ToString(),
+			"decimal" => query.Select(l => (decimal)l.StatusCode).ToString(),
+			_ => query.Select(l => (int?)l.StatusCode).ToString()
+		};
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP statusCode
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_FieldWidenedThenWhere_FiltersOnTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (long)l.StatusCode)
+			.Where(x => x > 1)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP statusCode
+            | WHERE statusCode > 1
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_EnumToItsUnderlyingType_KeepsTheField()
+	{
+		var esql = CreateQuery<OrdinalEnumDocument>()
+			.From("docs")
+			.Select(d => (int)d.Priority)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM docs
+            | KEEP priority
+            """.NativeLineEndings());
+	}
+
+	[Test]
+	public void Select_EnumToAShorterInteger_IsNotSupported()
+	{
+		var act = () => CreateQuery<OrdinalEnumDocument>()
+			.From("docs")
+			.Select(d => (byte)d.Priority)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Priority to Byte can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldToFloat_KeepsTheField()
+	{
+		var esql = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (float)l.Duration)
+			.ToString();
+
+		_ = esql.Should().Be(
+			"""
+            FROM logs-*
+            | KEEP duration
+            """.NativeLineEndings());
+	}
+
 	[Test]
 	public void Select_FieldBoxed_KeepsTheField()
 	{

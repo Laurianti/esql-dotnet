@@ -57,6 +57,20 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 
 	private static readonly ConcurrentDictionary<Type, PropertyInfo> ResultMembers = new();
 
+	// Each integral type with the integral types that hold every one of its values, as C# converts implicitly.
+	private static readonly Dictionary<Type, Type[]> IntegralWidenings = new()
+	{
+		[typeof(sbyte)] = [typeof(short), typeof(int), typeof(long)],
+		[typeof(byte)] = [typeof(short), typeof(ushort), typeof(int), typeof(uint), typeof(long), typeof(ulong)],
+		[typeof(short)] = [typeof(int), typeof(long)],
+		[typeof(ushort)] = [typeof(int), typeof(uint), typeof(long), typeof(ulong)],
+		[typeof(char)] = [typeof(ushort), typeof(int), typeof(uint), typeof(long), typeof(ulong)],
+		[typeof(int)] = [typeof(long)],
+		[typeof(uint)] = [typeof(long), typeof(ulong)],
+		[typeof(long)] = [],
+		[typeof(ulong)] = []
+	};
+
 	// The expression that stands for the single value of each row after a scalar Select, by the call that produces those rows.
 	private readonly Dictionary<Expression, SingleValue> _singleValues = [];
 
@@ -111,6 +125,27 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 				$"A Select that computes a single value cannot return it as {selector.ReturnType.Name}: the value is read "
 				+ "back only as its own type. Return it as it is, as in 'Select(l => l.Duration * 3)', or project it into a member."
 			);
+		}
+	}
+
+	/// <summary>
+	/// Refuses a selector that converts its value in a way that can change it, such as <c>(int)</c> of a double: the
+	/// column holds the value as it was, so the rows and the operators after them would not see the conversion.
+	/// </summary>
+	public static void ThrowIfConversionChangesTheValue(LambdaExpression selector)
+	{
+		for (var current = selector.Body; current is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert;
+			current = convert.Operand)
+		{
+			if (ChangesTheValue(convert.Operand.Type, convert.Type))
+			{
+				var from = Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type;
+				var to = Nullable.GetUnderlyingType(convert.Type) ?? convert.Type;
+				throw new NotSupportedException(
+					$"A Select that converts {from.Name} to {to.Name} can change the value, which the column would not show: "
+					+ $"select it as {from.Name} and convert it after the query runs."
+				);
+			}
 		}
 	}
 
@@ -327,6 +362,21 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		}
 
 		return current is ParameterExpression;
+	}
+
+	// A conversion to an integral type from one that is not integral, or from an integral type it cannot hold every
+	// value of. A conversion to a floating or decimal type, to an enum, or to the nullable form keeps the value.
+	private static bool ChangesTheValue(Type from, Type to)
+	{
+		from = Nullable.GetUnderlyingType(from) ?? from;
+		to = Nullable.GetUnderlyingType(to) ?? to;
+		if (from.IsEnum)
+			from = Enum.GetUnderlyingType(from);
+
+		if (from == to || !IntegralWidenings.ContainsKey(to))
+			return false;
+
+		return !IntegralWidenings.TryGetValue(from, out var wider) || !wider.Contains(to);
 	}
 }
 
