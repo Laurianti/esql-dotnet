@@ -142,6 +142,14 @@ public class SingleValueWithoutColumnTests : EsqlTestBase
 	}
 
 	[Test]
+	public void AggregateOfAFilteredGroup_IsNotSupported()
+	{
+		var act = () => Durations().GroupBy(x => 1).Select(g => new { V = g.Where(x => x > 1).Sum() }).ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("Sum over a group that is filtered or transformed*");
+	}
+
+	[Test]
 	public void SingleAggregationOfAGroup_IsNotSupported()
 	{
 		var act = () => Durations().GroupBy(x => 1).Select(g => g.Sum()).ToString();

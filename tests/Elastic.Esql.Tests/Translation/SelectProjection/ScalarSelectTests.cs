@@ -378,6 +378,55 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	[Arguments(nameof(Enumerable.Sum))]
+	[Arguments(nameof(Enumerable.Average))]
+	[Arguments(nameof(Enumerable.Min))]
+	[Arguments(nameof(Enumerable.Max))]
+	public void Select_FieldThenGroupByThenAggregateOfAFilteredGroup_IsNotSupported(string method)
+	{
+		var grouped = CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.GroupBy(x => 1);
+
+		var act = () => method switch
+		{
+			nameof(Enumerable.Sum) => grouped.Select(g => new { V = g.Where(x => x > 10).Sum() }).ToString(),
+			nameof(Enumerable.Average) => grouped.Select(g => new { V = g.Where(x => x > 10).Average() }).ToString(),
+			nameof(Enumerable.Min) => grouped.Select(g => new { V = g.Where(x => x > 10).Min() }).ToString(),
+			_ => grouped.Select(g => new { V = g.Where(x => x > 10).Max() }).ToString()
+		};
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage($"{method} over a group that is filtered or transformed*");
+	}
+
+	[Test]
+	public void Select_ComputedThenGroupByThenSumOfAProjectedGroup_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration * 3)
+			.GroupBy(x => x)
+			.Select(g => new { g.Key, Total = g.Select(x => x * 2).Sum() })
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("Sum over a group that is filtered or transformed*");
+	}
+
+	[Test]
+	public void Select_FieldThenGroupByThenSingleSumOfAFilteredGroup_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.GroupBy(x => x)
+			.Select(g => g.Where(x => x > 10).Sum())
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>().WithMessage("Sum over a group that is filtered or transformed*");
+	}
+
+	[Test]
 	public void Select_ComputedThenGroupByWithIdentityElementThenSum_AggregatesTheResult()
 	{
 		var esql = CreateQuery<LogEntry>()
