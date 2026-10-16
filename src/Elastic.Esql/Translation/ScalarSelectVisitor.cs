@@ -129,24 +129,22 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 	}
 
 	/// <summary>
-	/// Refuses a selector that converts its value in a way that can change it, such as <c>(int)</c> of a double: the
-	/// column holds the value as it was, so the rows and the operators after them would not see the conversion.
+	/// Refuses a selector that converts a value in a way that can change it, such as <c>(int)</c> of a double, also
+	/// inside a computation: the translation drops the conversion, so the column would not show it.
 	/// </summary>
 	public static void ThrowIfConversionChangesTheValue(LambdaExpression selector)
 	{
-		for (var current = selector.Body; current is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } convert;
-			current = convert.Operand)
-		{
-			if (ChangesTheValue(convert.Operand.Type, convert.Type))
-			{
-				var from = Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type;
-				var to = Nullable.GetUnderlyingType(convert.Type) ?? convert.Type;
-				throw new NotSupportedException(
-					$"A Select that converts {from.Name} to {to.Name} can change the value, which the column would not show: "
-					+ $"select it as {from.Name} and convert it after the query runs."
-				);
-			}
-		}
+		var finder = new ValueChangingConversionFinder();
+		_ = finder.Visit(selector.Body);
+		if (finder.Found is not { } convert)
+			return;
+
+		var from = Nullable.GetUnderlyingType(convert.Operand.Type) ?? convert.Operand.Type;
+		var to = Nullable.GetUnderlyingType(convert.Type) ?? convert.Type;
+		throw new NotSupportedException(
+			$"A Select that converts {from.Name} to {to.Name} can change the value, which the column would not show: "
+			+ $"select it as {from.Name} and convert it after the query runs."
+		);
 	}
 
 	/// <summary>
@@ -362,6 +360,21 @@ internal sealed class ScalarSelectVisitor : ExpressionVisitor
 		}
 
 		return current is ParameterExpression;
+	}
+
+	// The outermost conversion that can change a value.
+	private sealed class ValueChangingConversionFinder : ExpressionVisitor
+	{
+		public UnaryExpression? Found { get; private set; }
+
+		protected override Expression VisitUnary(UnaryExpression node)
+		{
+			if (Found is null && node.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked
+				&& ChangesTheValue(node.Operand.Type, node.Type))
+				Found = node;
+
+			return base.VisitUnary(node);
+		}
 	}
 
 	// A conversion to an integral type from one that is not integral, or from an integral type it cannot hold every

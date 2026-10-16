@@ -1161,6 +1161,57 @@ public class ScalarSelectTests : EsqlTestBase
 	}
 
 	[Test]
+	public void Select_FieldTruncatedInsideAComputation_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (int)l.Duration + 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldThenTruncatedInsideAComputation_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.Select(x => (int)x + 1)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldThenWhereThenTruncatedInsideAComputation_IsNotSupported()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => l.Duration)
+			.Where(x => x > 0)
+			.Select(x => (int)x * 2)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Double to Int32 can change the value*");
+	}
+
+	[Test]
+	public void Select_FieldNarrowedTwice_NamesTheOuterConversion()
+	{
+		var act = () => CreateQuery<LogEntry>()
+			.From("logs-*")
+			.Select(l => (short)(int)l.Duration)
+			.ToString();
+
+		_ = act.Should().Throw<NotSupportedException>()
+			.WithMessage("A Select that converts Int32 to Int16 can change the value*");
+	}
+
+	[Test]
 	public void Select_FieldNarrowedToAShorterInteger_IsNotSupported()
 	{
 		var act = () => CreateQuery<LogEntry>()
